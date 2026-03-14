@@ -1,0 +1,3702 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>digital.vasic.background: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">digital.vasic.background/event_publisher.go (0.0%)</option>
+				
+				<option value="file1">digital.vasic.background/events.go (0.0%)</option>
+				
+				<option value="file2">digital.vasic.background/messaging_adapter.go (0.0%)</option>
+				
+				<option value="file3">digital.vasic.background/metrics.go (5.0%)</option>
+				
+				<option value="file4">digital.vasic.background/resource_monitor.go (0.0%)</option>
+				
+				<option value="file5">digital.vasic.background/resource_monitor_test_helpers.go (0.0%)</option>
+				
+				<option value="file6">digital.vasic.background/stuck_detector.go (0.0%)</option>
+				
+				<option value="file7">digital.vasic.background/task_queue.go (24.7%)</option>
+				
+				<option value="file8">digital.vasic.background/worker_pool.go (24.0%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">// Package background provides event publishing abstraction for background tasks.
+package background
+
+import (
+        "context"
+)
+
+// EventPublisher defines the interface for publishing background task events.
+// Implementations can forward events to messaging systems, log aggregators, etc.
+type EventPublisher interface {
+        // Publish publishes a background task event.
+        Publish(ctx context.Context, event *BackgroundTaskEvent) error
+}
+
+// NoOpEventPublisher is a no-operation event publisher that discards all events.
+// Useful for testing or when event publishing is disabled.
+type NoOpEventPublisher struct{}
+
+// Publish discards the event and returns nil.
+func (n *NoOpEventPublisher) Publish(ctx context.Context, event *BackgroundTaskEvent) error <span class="cov0" title="0">{
+        return nil
+}</span>
+
+// LoggingEventPublisher logs events using a logger.
+type LoggingEventPublisher struct {
+        logger Logger
+}
+
+// Logger is a simple logging interface.
+type Logger interface {
+        Debugf(format string, args ...interface{})
+        Infof(format string, args ...interface{})
+        Warnf(format string, args ...interface{})
+        Errorf(format string, args ...interface{})
+}
+
+// NewLoggingEventPublisher creates a new logging event publisher.
+func NewLoggingEventPublisher(logger Logger) *LoggingEventPublisher <span class="cov0" title="0">{
+        return &amp;LoggingEventPublisher{logger: logger}
+}</span>
+
+// Publish logs the event at debug level.
+func (l *LoggingEventPublisher) Publish(ctx context.Context, event *BackgroundTaskEvent) error <span class="cov0" title="0">{
+        l.logger.Debugf("Background task event: type=%s task_id=%s status=%s progress=%.1f",
+                event.EventType, event.TaskID, event.Status, event.Progress)
+        return nil
+}</span>
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">// Package background provides background task event types and publishing
+// for integration with the messaging system.
+package background
+
+import (
+        "context"
+        "sync"
+        "time"
+
+        "digital.vasic.models"
+)
+
+// Task event topics for the messaging system.
+const (
+        // TopicTaskEvents is the main topic for all task lifecycle events.
+        TopicTaskEvents = "helixagent.events.tasks"
+        // TopicTaskCreated is for task creation events.
+        TopicTaskCreated = "helixagent.events.tasks.created"
+        // TopicTaskStarted is for task start events.
+        TopicTaskStarted = "helixagent.events.tasks.started"
+        // TopicTaskProgress is for task progress events.
+        TopicTaskProgress = "helixagent.events.tasks.progress"
+        // TopicTaskCompleted is for task completion events.
+        TopicTaskCompleted = "helixagent.events.tasks.completed"
+        // TopicTaskFailed is for task failure events.
+        TopicTaskFailed = "helixagent.events.tasks.failed"
+        // TopicTaskStuck is for stuck task events.
+        TopicTaskStuck = "helixagent.events.tasks.stuck"
+        // TopicTaskCancelled is for task cancellation events.
+        TopicTaskCancelled = "helixagent.events.tasks.cancelled"
+        // TopicTaskRetrying is for task retry events.
+        TopicTaskRetrying = "helixagent.events.tasks.retrying"
+        // TopicTaskDeadLetter is for dead letter events.
+        TopicTaskDeadLetter = "helixagent.events.tasks.deadletter"
+)
+
+// TaskEventType represents the type of task event.
+type TaskEventType string
+
+const (
+        TaskEventTypeCreated    TaskEventType = "task.created"
+        TaskEventTypeStarted    TaskEventType = "task.started"
+        TaskEventTypeProgress   TaskEventType = "task.progress"
+        TaskEventTypeHeartbeat  TaskEventType = "task.heartbeat"
+        TaskEventTypePaused     TaskEventType = "task.paused"
+        TaskEventTypeResumed    TaskEventType = "task.resumed"
+        TaskEventTypeCompleted  TaskEventType = "task.completed"
+        TaskEventTypeFailed     TaskEventType = "task.failed"
+        TaskEventTypeStuck      TaskEventType = "task.stuck"
+        TaskEventTypeCancelled  TaskEventType = "task.cancelled"
+        TaskEventTypeRetrying   TaskEventType = "task.retrying"
+        TaskEventTypeDeadLetter TaskEventType = "task.deadletter"
+        TaskEventTypeLog        TaskEventType = "task.log"
+        TaskEventTypeResource   TaskEventType = "task.resource"
+)
+
+// String returns the string representation of TaskEventType.
+func (t TaskEventType) String() string <span class="cov0" title="0">{
+        return string(t)
+}</span>
+
+// Topic returns the appropriate topic for this event type.
+func (t TaskEventType) Topic() string <span class="cov0" title="0">{
+        switch t </span>{
+        case TaskEventTypeCreated:<span class="cov0" title="0">
+                return TopicTaskCreated</span>
+        case TaskEventTypeStarted:<span class="cov0" title="0">
+                return TopicTaskStarted</span>
+        case TaskEventTypeProgress, TaskEventTypeHeartbeat:<span class="cov0" title="0">
+                return TopicTaskProgress</span>
+        case TaskEventTypeCompleted:<span class="cov0" title="0">
+                return TopicTaskCompleted</span>
+        case TaskEventTypeFailed:<span class="cov0" title="0">
+                return TopicTaskFailed</span>
+        case TaskEventTypeStuck:<span class="cov0" title="0">
+                return TopicTaskStuck</span>
+        case TaskEventTypeCancelled:<span class="cov0" title="0">
+                return TopicTaskCancelled</span>
+        case TaskEventTypeRetrying:<span class="cov0" title="0">
+                return TopicTaskRetrying</span>
+        case TaskEventTypeDeadLetter:<span class="cov0" title="0">
+                return TopicTaskDeadLetter</span>
+        default:<span class="cov0" title="0">
+                return TopicTaskEvents</span>
+        }
+}
+
+// BackgroundTaskEvent represents a task lifecycle event.
+type BackgroundTaskEvent struct {
+        // EventID is the unique identifier for this event.
+        EventID string `json:"event_id"`
+        // EventType is the type of event.
+        EventType TaskEventType `json:"event_type"`
+        // TaskID is the ID of the task.
+        TaskID string `json:"task_id"`
+        // TaskType is the type of task.
+        TaskType string `json:"task_type"`
+        // TaskName is the name of the task.
+        TaskName string `json:"task_name"`
+        // Status is the current status of the task.
+        Status models.TaskStatus `json:"status"`
+        // WorkerID is the ID of the worker processing the task.
+        WorkerID string `json:"worker_id,omitempty"`
+        // Progress is the current progress (0-100).
+        Progress float64 `json:"progress,omitempty"`
+        // ProgressMessage is an optional progress message.
+        ProgressMessage string `json:"progress_message,omitempty"`
+        // Error contains error information if applicable.
+        Error string `json:"error,omitempty"`
+        // Duration is the elapsed duration.
+        Duration time.Duration `json:"duration,omitempty"`
+        // RetryCount is the current retry count.
+        RetryCount int `json:"retry_count,omitempty"`
+        // Metadata contains additional event data.
+        Metadata map[string]interface{} `json:"metadata,omitempty"`
+        // Timestamp is when the event occurred.
+        Timestamp time.Time `json:"timestamp"`
+        // CorrelationID links related events.
+        CorrelationID string `json:"correlation_id,omitempty"`
+        // TraceID for distributed tracing.
+        TraceID string `json:"trace_id,omitempty"`
+}
+
+// NewBackgroundTaskEvent creates a new background task event.
+func NewBackgroundTaskEvent(eventType TaskEventType, task *models.BackgroundTask) *BackgroundTaskEvent <span class="cov0" title="0">{
+        event := &amp;BackgroundTaskEvent{
+                EventID:   generateEventID(),
+                EventType: eventType,
+                TaskID:    task.ID,
+                TaskType:  task.TaskType,
+                TaskName:  task.TaskName,
+                Status:    task.Status,
+                Progress:  task.Progress,
+                Timestamp: time.Now().UTC(),
+                Metadata:  make(map[string]interface{}),
+        }
+
+        if task.WorkerID != nil </span><span class="cov0" title="0">{
+                event.WorkerID = *task.WorkerID
+        }</span>
+        <span class="cov0" title="0">if task.ProgressMessage != nil </span><span class="cov0" title="0">{
+                event.ProgressMessage = *task.ProgressMessage
+        }</span>
+        <span class="cov0" title="0">if task.LastError != nil </span><span class="cov0" title="0">{
+                event.Error = *task.LastError
+        }</span>
+        <span class="cov0" title="0">if task.CorrelationID != nil </span><span class="cov0" title="0">{
+                event.CorrelationID = *task.CorrelationID
+        }</span>
+        <span class="cov0" title="0">if task.StartedAt != nil </span><span class="cov0" title="0">{
+                event.Duration = time.Since(*task.StartedAt)
+        }</span>
+        <span class="cov0" title="0">event.RetryCount = task.RetryCount
+
+        return event</span>
+}
+
+// TaskEventPublisher publishes task lifecycle events using an EventPublisher.
+type TaskEventPublisher struct {
+        publisher    EventPublisher
+        logger       Logger
+        enabled      bool
+        asyncPublish bool
+        publishCh    chan *BackgroundTaskEvent
+        stopCh       chan struct{}
+        wg           sync.WaitGroup
+        mu           sync.RWMutex
+}
+
+// TaskEventPublisherConfig holds configuration for the event publisher.
+type TaskEventPublisherConfig struct {
+        // Enabled enables event publishing.
+        Enabled bool `json:"enabled" yaml:"enabled"`
+        // AsyncPublish enables async event publishing.
+        AsyncPublish bool `json:"async_publish" yaml:"async_publish"`
+        // BufferSize is the async publish buffer size.
+        BufferSize int `json:"buffer_size" yaml:"buffer_size"`
+}
+
+// DefaultTaskEventPublisherConfig returns default configuration.
+func DefaultTaskEventPublisherConfig() *TaskEventPublisherConfig <span class="cov0" title="0">{
+        return &amp;TaskEventPublisherConfig{
+                Enabled:      true,
+                AsyncPublish: true,
+                BufferSize:   1000,
+        }
+}</span>
+
+// noopLogger is a logger that does nothing.
+type noopLogger struct{}
+
+func (n *noopLogger) Debugf(format string, args ...interface{}) {<span class="cov0" title="0">}</span>
+func (n *noopLogger) Infof(format string, args ...interface{})  {<span class="cov0" title="0">}</span>
+func (n *noopLogger) Warnf(format string, args ...interface{})  {<span class="cov0" title="0">}</span>
+func (n *noopLogger) Errorf(format string, args ...interface{}) {<span class="cov0" title="0">}</span>
+
+// NewTaskEventPublisher creates a new task event publisher.
+func NewTaskEventPublisher(publisher EventPublisher, logger Logger, config *TaskEventPublisherConfig) *TaskEventPublisher <span class="cov0" title="0">{
+        if config == nil </span><span class="cov0" title="0">{
+                config = DefaultTaskEventPublisherConfig()
+        }</span>
+        <span class="cov0" title="0">if logger == nil </span><span class="cov0" title="0">{
+                // Create a default logger that does nothing
+                logger = &amp;noopLogger{}
+        }</span>
+
+        <span class="cov0" title="0">p := &amp;TaskEventPublisher{
+                publisher:    publisher,
+                logger:       logger,
+                enabled:      config.Enabled,
+                asyncPublish: config.AsyncPublish,
+                stopCh:       make(chan struct{}),
+        }
+
+        if config.AsyncPublish &amp;&amp; config.BufferSize &gt; 0 </span><span class="cov0" title="0">{
+                p.publishCh = make(chan *BackgroundTaskEvent, config.BufferSize)
+        }</span>
+
+        <span class="cov0" title="0">return p</span>
+}
+
+// Start starts the async publish goroutine if enabled.
+func (p *TaskEventPublisher) Start() <span class="cov0" title="0">{
+        if !p.asyncPublish || p.publishCh == nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+
+        <span class="cov0" title="0">p.wg.Add(1)
+        go p.asyncPublishLoop()</span>
+}
+
+// Stop stops the event publisher.
+func (p *TaskEventPublisher) Stop() <span class="cov0" title="0">{
+        close(p.stopCh)
+        if p.publishCh != nil </span><span class="cov0" title="0">{
+                close(p.publishCh)
+        }</span>
+        <span class="cov0" title="0">p.wg.Wait()</span>
+}
+
+// asyncPublishLoop processes async publish events.
+func (p *TaskEventPublisher) asyncPublishLoop() <span class="cov0" title="0">{
+        defer p.wg.Done()
+
+        for </span><span class="cov0" title="0">{
+                select </span>{
+                case event, ok := &lt;-p.publishCh:<span class="cov0" title="0">
+                        if !ok </span><span class="cov0" title="0">{
+                                return
+                        }</span>
+                        <span class="cov0" title="0">if err := p.doPublish(context.Background(), event); err != nil </span><span class="cov0" title="0">{
+                                p.logger.Debugf("Failed to publish event: %v", err)
+                        }</span>
+                case &lt;-p.stopCh:<span class="cov0" title="0">
+                        // Drain remaining events
+                        for event := range p.publishCh </span><span class="cov0" title="0">{
+                                if err := p.doPublish(context.Background(), event); err != nil </span><span class="cov0" title="0">{
+                                        p.logger.Debugf("Failed to publish event: %v", err)
+                                }</span>
+                        }
+                        <span class="cov0" title="0">return</span>
+                }
+        }
+}
+
+// Publish publishes a task event.
+func (p *TaskEventPublisher) Publish(ctx context.Context, event *BackgroundTaskEvent) error <span class="cov0" title="0">{
+        if !p.enabled || p.publisher == nil </span><span class="cov0" title="0">{
+                return nil
+        }</span>
+
+        <span class="cov0" title="0">if p.asyncPublish &amp;&amp; p.publishCh != nil </span><span class="cov0" title="0">{
+                select </span>{
+                case p.publishCh &lt;- event:<span class="cov0" title="0">
+                        return nil</span>
+                default:<span class="cov0" title="0">
+                        // Buffer full, publish synchronously
+                        p.logger.Warnf("Event publish buffer full, publishing synchronously")
+                        return p.doPublish(ctx, event)</span>
+                }
+        }
+
+        <span class="cov0" title="0">return p.doPublish(ctx, event)</span>
+}
+
+// doPublish performs the actual event publish.
+func (p *TaskEventPublisher) doPublish(ctx context.Context, event *BackgroundTaskEvent) error <span class="cov0" title="0">{
+        if event == nil </span><span class="cov0" title="0">{
+                return nil
+        }</span>
+
+        <span class="cov0" title="0">if err := p.publisher.Publish(ctx, event); err != nil </span><span class="cov0" title="0">{
+                p.logger.Errorf("Failed to publish task event: type=%s task_id=%s error=%v",
+                        event.EventType, event.TaskID, err)
+                return err
+        }</span>
+
+        <span class="cov0" title="0">p.logger.Debugf("Published task event: type=%s task_id=%s",
+                event.EventType, event.TaskID)
+
+        return nil</span>
+}
+
+// PublishTaskCreated publishes a task created event.
+func (p *TaskEventPublisher) PublishTaskCreated(ctx context.Context, task *models.BackgroundTask) error <span class="cov0" title="0">{
+        return p.Publish(ctx, NewBackgroundTaskEvent(TaskEventTypeCreated, task))
+}</span>
+
+// PublishTaskStarted publishes a task started event.
+func (p *TaskEventPublisher) PublishTaskStarted(ctx context.Context, task *models.BackgroundTask) error <span class="cov0" title="0">{
+        return p.Publish(ctx, NewBackgroundTaskEvent(TaskEventTypeStarted, task))
+}</span>
+
+// PublishTaskProgress publishes a task progress event.
+func (p *TaskEventPublisher) PublishTaskProgress(ctx context.Context, task *models.BackgroundTask) error <span class="cov0" title="0">{
+        return p.Publish(ctx, NewBackgroundTaskEvent(TaskEventTypeProgress, task))
+}</span>
+
+// PublishTaskCompleted publishes a task completed event.
+func (p *TaskEventPublisher) PublishTaskCompleted(ctx context.Context, task *models.BackgroundTask, result interface{}) error <span class="cov0" title="0">{
+        event := NewBackgroundTaskEvent(TaskEventTypeCompleted, task)
+        if result != nil </span><span class="cov0" title="0">{
+                event.Metadata["result"] = result
+        }</span>
+        <span class="cov0" title="0">return p.Publish(ctx, event)</span>
+}
+
+// PublishTaskFailed publishes a task failed event.
+func (p *TaskEventPublisher) PublishTaskFailed(ctx context.Context, task *models.BackgroundTask, err error) error <span class="cov0" title="0">{
+        event := NewBackgroundTaskEvent(TaskEventTypeFailed, task)
+        if err != nil </span><span class="cov0" title="0">{
+                event.Error = err.Error()
+                event.Metadata["error_details"] = err.Error()
+        }</span>
+        <span class="cov0" title="0">return p.Publish(ctx, event)</span>
+}
+
+// PublishTaskStuck publishes a task stuck event.
+func (p *TaskEventPublisher) PublishTaskStuck(ctx context.Context, task *models.BackgroundTask, reason string) error <span class="cov0" title="0">{
+        event := NewBackgroundTaskEvent(TaskEventTypeStuck, task)
+        event.Metadata["reason"] = reason
+        return p.Publish(ctx, event)
+}</span>
+
+// PublishTaskCancelled publishes a task cancelled event.
+func (p *TaskEventPublisher) PublishTaskCancelled(ctx context.Context, task *models.BackgroundTask) error <span class="cov0" title="0">{
+        return p.Publish(ctx, NewBackgroundTaskEvent(TaskEventTypeCancelled, task))
+}</span>
+
+// PublishTaskRetrying publishes a task retrying event.
+func (p *TaskEventPublisher) PublishTaskRetrying(ctx context.Context, task *models.BackgroundTask, delay time.Duration) error <span class="cov0" title="0">{
+        event := NewBackgroundTaskEvent(TaskEventTypeRetrying, task)
+        event.Metadata["retry_delay_ms"] = delay.Milliseconds()
+        event.Metadata["next_attempt"] = time.Now().Add(delay)
+        return p.Publish(ctx, event)
+}</span>
+
+// PublishTaskDeadLetter publishes a task dead letter event.
+func (p *TaskEventPublisher) PublishTaskDeadLetter(ctx context.Context, task *models.BackgroundTask, reason string) error <span class="cov0" title="0">{
+        event := NewBackgroundTaskEvent(TaskEventTypeDeadLetter, task)
+        event.Metadata["reason"] = reason
+        return p.Publish(ctx, event)
+}</span>
+
+// IsEnabled returns true if publishing is enabled.
+func (p *TaskEventPublisher) IsEnabled() bool <span class="cov0" title="0">{
+        p.mu.RLock()
+        defer p.mu.RUnlock()
+        return p.enabled
+}</span>
+
+// SetEnabled enables or disables publishing.
+func (p *TaskEventPublisher) SetEnabled(enabled bool) <span class="cov0" title="0">{
+        p.mu.Lock()
+        defer p.mu.Unlock()
+        p.enabled = enabled
+}</span>
+
+// generateEventID generates a unique event ID.
+func generateEventID() string <span class="cov0" title="0">{
+        return time.Now().UTC().Format("20060102150405.000000000") + "-" + randomEventString(8)
+}</span>
+
+// randomEventString generates a random string for event IDs.
+func randomEventString(n int) string <span class="cov0" title="0">{
+        const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+        b := make([]byte, n)
+        for i := range b </span><span class="cov0" title="0">{
+                b[i] = letters[time.Now().UnixNano()%int64(len(letters))]
+                time.Sleep(time.Nanosecond)
+        }</span>
+        <span class="cov0" title="0">return string(b)</span>
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">// Package background provides a messaging adapter for the task queue system.
+package background
+
+import (
+        "context"
+        "time"
+
+        "github.com/sirupsen/logrus"
+
+        "digital.vasic.models"
+)
+
+// MessagingTaskQueue wraps a TaskQueue and publishes events using an EventPublisher.
+// It implements the TaskQueue interface and adds event publishing on lifecycle changes.
+type MessagingTaskQueue struct {
+        // delegate is the underlying task queue implementation.
+        delegate TaskQueue
+        // publisher is the event publisher.
+        publisher *TaskEventPublisher
+        // logger for logging.
+        logger Logger
+}
+
+// MessagingTaskQueueConfig holds configuration for MessagingTaskQueue.
+type MessagingTaskQueueConfig struct {
+        // PublisherConfig is the event publisher configuration.
+        PublisherConfig *TaskEventPublisherConfig `json:"publisher_config" yaml:"publisher_config"`
+}
+
+// DefaultMessagingTaskQueueConfig returns default configuration.
+func DefaultMessagingTaskQueueConfig() *MessagingTaskQueueConfig <span class="cov0" title="0">{
+        return &amp;MessagingTaskQueueConfig{
+                PublisherConfig: DefaultTaskEventPublisherConfig(),
+        }
+}</span>
+
+// NewMessagingTaskQueue creates a new messaging-enabled task queue.
+func NewMessagingTaskQueue(
+        delegate TaskQueue,
+        publisher EventPublisher,
+        logger Logger,
+        config *MessagingTaskQueueConfig,
+) *MessagingTaskQueue <span class="cov0" title="0">{
+        if config == nil </span><span class="cov0" title="0">{
+                config = DefaultMessagingTaskQueueConfig()
+        }</span>
+        <span class="cov0" title="0">if logger == nil </span><span class="cov0" title="0">{
+                logger = &amp;noopLogger{}
+        }</span>
+
+        <span class="cov0" title="0">taskPublisher := NewTaskEventPublisher(publisher, logger, config.PublisherConfig)
+
+        return &amp;MessagingTaskQueue{
+                delegate:  delegate,
+                publisher: taskPublisher,
+                logger:    logger,
+        }</span>
+}
+
+// Start starts the messaging task queue.
+func (q *MessagingTaskQueue) Start() <span class="cov0" title="0">{
+        q.publisher.Start()
+}</span>
+
+// Stop stops the messaging task queue.
+func (q *MessagingTaskQueue) Stop() <span class="cov0" title="0">{
+        q.publisher.Stop()
+}</span>
+
+// Enqueue adds a task to the queue and publishes a created event.
+func (q *MessagingTaskQueue) Enqueue(ctx context.Context, task *models.BackgroundTask) error <span class="cov0" title="0">{
+        // Enqueue to the delegate
+        if err := q.delegate.Enqueue(ctx, task); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        // Publish created event
+        <span class="cov0" title="0">if err := q.publisher.PublishTaskCreated(ctx, task); err != nil </span><span class="cov0" title="0">{
+                q.logger.Warnf("Failed to publish task created event: task_id=%s error=%v", task.ID, err)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// Dequeue retrieves and claims a task, publishing a started event.
+func (q *MessagingTaskQueue) Dequeue(ctx context.Context, workerID string, requirements ResourceRequirements) (*models.BackgroundTask, error) <span class="cov0" title="0">{
+        task, err := q.delegate.Dequeue(ctx, workerID, requirements)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">if task == nil </span><span class="cov0" title="0">{
+                return nil, nil
+        }</span>
+
+        // Publish started event
+        <span class="cov0" title="0">if err := q.publisher.PublishTaskStarted(ctx, task); err != nil </span><span class="cov0" title="0">{
+                q.logger.Warnf("Failed to publish task started event: task_id=%s error=%v", task.ID, err)
+        }</span>
+
+        <span class="cov0" title="0">return task, nil</span>
+}
+
+// Peek returns tasks without claiming them (no event published).
+func (q *MessagingTaskQueue) Peek(ctx context.Context, count int) ([]*models.BackgroundTask, error) <span class="cov0" title="0">{
+        return q.delegate.Peek(ctx, count)
+}</span>
+
+// Requeue returns a task to the queue and publishes a retrying event.
+func (q *MessagingTaskQueue) Requeue(ctx context.Context, taskID string, delay time.Duration) error <span class="cov0" title="0">{
+        // First get the task for the event
+        var task *models.BackgroundTask
+        if pg, ok := q.delegate.(*PostgresTaskQueue); ok </span><span class="cov0" title="0">{
+                var err error
+                task, err = pg.repository.GetByID(ctx, taskID)
+                if err != nil </span><span class="cov0" title="0">{
+                        q.logger.Debugf("Could not get task for requeue event: task_id=%s error=%v", taskID, err)
+                }</span>
+        }
+
+        // Requeue to the delegate
+        <span class="cov0" title="0">if err := q.delegate.Requeue(ctx, taskID, delay); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        // Publish retrying event
+        <span class="cov0" title="0">if task != nil </span><span class="cov0" title="0">{
+                if err := q.publisher.PublishTaskRetrying(ctx, task, delay); err != nil </span><span class="cov0" title="0">{
+                        q.logger.Warnf("Failed to publish task retrying event: task_id=%s error=%v", taskID, err)
+                }</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// MoveToDeadLetter moves a failed task and publishes a dead letter event.
+func (q *MessagingTaskQueue) MoveToDeadLetter(ctx context.Context, taskID string, reason string) error <span class="cov0" title="0">{
+        // First get the task for the event
+        var task *models.BackgroundTask
+        if pg, ok := q.delegate.(*PostgresTaskQueue); ok </span><span class="cov0" title="0">{
+                var err error
+                task, err = pg.repository.GetByID(ctx, taskID)
+                if err != nil </span><span class="cov0" title="0">{
+                        q.logger.Debugf("Could not get task for dead letter event: task_id=%s error=%v", taskID, err)
+                }</span>
+        }
+
+        // Move to dead letter
+        <span class="cov0" title="0">if err := q.delegate.MoveToDeadLetter(ctx, taskID, reason); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        // Publish dead letter event
+        <span class="cov0" title="0">if task != nil </span><span class="cov0" title="0">{
+                if err := q.publisher.PublishTaskDeadLetter(ctx, task, reason); err != nil </span><span class="cov0" title="0">{
+                        q.logger.Warnf("Failed to publish task dead letter event: task_id=%s error=%v", taskID, err)
+                }</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// GetPendingCount returns the number of pending tasks.
+func (q *MessagingTaskQueue) GetPendingCount(ctx context.Context) (int64, error) <span class="cov0" title="0">{
+        return q.delegate.GetPendingCount(ctx)
+}</span>
+
+// GetRunningCount returns the number of running tasks.
+func (q *MessagingTaskQueue) GetRunningCount(ctx context.Context) (int64, error) <span class="cov0" title="0">{
+        return q.delegate.GetRunningCount(ctx)
+}</span>
+
+// GetQueueDepth returns counts by priority.
+func (q *MessagingTaskQueue) GetQueueDepth(ctx context.Context) (map[models.TaskPriority]int64, error) <span class="cov0" title="0">{
+        return q.delegate.GetQueueDepth(ctx)
+}</span>
+
+// Publisher returns the event publisher.
+func (q *MessagingTaskQueue) Publisher() *TaskEventPublisher <span class="cov0" title="0">{
+        return q.publisher
+}</span>
+
+// Delegate returns the underlying task queue.
+func (q *MessagingTaskQueue) Delegate() TaskQueue <span class="cov0" title="0">{
+        return q.delegate
+}</span>
+
+// MessagingProgressReporter wraps a ProgressReporter and publishes progress events.
+type MessagingProgressReporter struct {
+        // delegate is the underlying progress reporter.
+        delegate ProgressReporter
+        // publisher is the event publisher.
+        publisher *TaskEventPublisher
+        // task is the current task.
+        task *models.BackgroundTask
+        // logger for logging.
+        logger *logrus.Logger
+}
+
+// NewMessagingProgressReporter creates a new messaging-enabled progress reporter.
+func NewMessagingProgressReporter(
+        delegate ProgressReporter,
+        publisher *TaskEventPublisher,
+        task *models.BackgroundTask,
+        logger *logrus.Logger,
+) *MessagingProgressReporter <span class="cov0" title="0">{
+        return &amp;MessagingProgressReporter{
+                delegate:  delegate,
+                publisher: publisher,
+                task:      task,
+                logger:    logger,
+        }
+}</span>
+
+// ReportProgress reports task progress and publishes a progress event.
+func (r *MessagingProgressReporter) ReportProgress(percent float64, message string) error <span class="cov0" title="0">{
+        // Update task state
+        r.task.Progress = percent
+        r.task.ProgressMessage = &amp;message
+
+        // Report to delegate
+        if err := r.delegate.ReportProgress(percent, message); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        // Publish progress event
+        <span class="cov0" title="0">if err := r.publisher.PublishTaskProgress(context.Background(), r.task); err != nil </span><span class="cov0" title="0">{
+                r.logger.WithError(err).WithField("task_id", r.task.ID).
+                        Debug("Failed to publish task progress event")
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// ReportHeartbeat sends a heartbeat and optionally publishes a heartbeat event.
+func (r *MessagingProgressReporter) ReportHeartbeat() error <span class="cov0" title="0">{
+        return r.delegate.ReportHeartbeat()
+}</span>
+
+// ReportCheckpoint saves a checkpoint for pause/resume capability.
+func (r *MessagingProgressReporter) ReportCheckpoint(data []byte) error <span class="cov0" title="0">{
+        return r.delegate.ReportCheckpoint(data)
+}</span>
+
+// ReportMetrics reports custom metrics from the task.
+func (r *MessagingProgressReporter) ReportMetrics(metrics map[string]interface{}) error <span class="cov0" title="0">{
+        return r.delegate.ReportMetrics(metrics)
+}</span>
+
+// ReportLog reports a log entry from the task.
+func (r *MessagingProgressReporter) ReportLog(level, message string, fields map[string]interface{}) error <span class="cov0" title="0">{
+        return r.delegate.ReportLog(level, message, fields)
+}</span>
+
+// MessagingTaskExecutorWrapper wraps a TaskExecutor and publishes events.
+type MessagingTaskExecutorWrapper struct {
+        // executor is the underlying task executor.
+        executor TaskExecutor
+        // publisher is the event publisher.
+        publisher *TaskEventPublisher
+        // logger for logging.
+        logger *logrus.Logger
+}
+
+// NewMessagingTaskExecutorWrapper creates a new messaging-enabled executor wrapper.
+func NewMessagingTaskExecutorWrapper(
+        executor TaskExecutor,
+        publisher *TaskEventPublisher,
+        logger *logrus.Logger,
+) *MessagingTaskExecutorWrapper <span class="cov0" title="0">{
+        return &amp;MessagingTaskExecutorWrapper{
+                executor:  executor,
+                publisher: publisher,
+                logger:    logger,
+        }
+}</span>
+
+// Execute runs the task and publishes completion/failure events.
+func (w *MessagingTaskExecutorWrapper) Execute(ctx context.Context, task *models.BackgroundTask, reporter ProgressReporter) error <span class="cov0" title="0">{
+        // Wrap reporter with messaging
+        msgReporter := NewMessagingProgressReporter(reporter, w.publisher, task, w.logger)
+
+        // Execute the task
+        err := w.executor.Execute(ctx, task, msgReporter)
+
+        if err != nil </span><span class="cov0" title="0">{
+                // Publish failed event
+                task.Status = models.TaskStatusFailed
+                errStr := err.Error()
+                task.LastError = &amp;errStr
+                if pubErr := w.publisher.PublishTaskFailed(ctx, task, err); pubErr != nil </span><span class="cov0" title="0">{
+                        w.logger.WithError(pubErr).WithField("task_id", task.ID).
+                                Warn("Failed to publish task failed event")
+                }</span>
+        } else<span class="cov0" title="0"> {
+                // Publish completed event
+                task.Status = models.TaskStatusCompleted
+                task.Progress = 100
+                if pubErr := w.publisher.PublishTaskCompleted(ctx, task, nil); pubErr != nil </span><span class="cov0" title="0">{
+                        w.logger.WithError(pubErr).WithField("task_id", task.ID).
+                                Warn("Failed to publish task completed event")
+                }</span>
+        }
+
+        <span class="cov0" title="0">return err</span>
+}
+
+// CanPause returns whether this task type supports pause/resume.
+func (w *MessagingTaskExecutorWrapper) CanPause() bool <span class="cov0" title="0">{
+        return w.executor.CanPause()
+}</span>
+
+// Pause saves checkpoint for later resume.
+func (w *MessagingTaskExecutorWrapper) Pause(ctx context.Context, task *models.BackgroundTask) ([]byte, error) <span class="cov0" title="0">{
+        checkpoint, err := w.executor.Pause(ctx, task)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        // Publish paused event
+        <span class="cov0" title="0">task.Status = models.TaskStatusPaused
+        event := NewBackgroundTaskEvent(TaskEventTypePaused, task)
+        if pubErr := w.publisher.Publish(ctx, event); pubErr != nil </span><span class="cov0" title="0">{
+                w.logger.WithError(pubErr).WithField("task_id", task.ID).
+                        Warn("Failed to publish task paused event")
+        }</span>
+
+        <span class="cov0" title="0">return checkpoint, nil</span>
+}
+
+// Resume restores from checkpoint.
+func (w *MessagingTaskExecutorWrapper) Resume(ctx context.Context, task *models.BackgroundTask, checkpoint []byte) error <span class="cov0" title="0">{
+        if err := w.executor.Resume(ctx, task, checkpoint); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        // Publish resumed event
+        <span class="cov0" title="0">task.Status = models.TaskStatusRunning
+        event := NewBackgroundTaskEvent(TaskEventTypeResumed, task)
+        if pubErr := w.publisher.Publish(ctx, event); pubErr != nil </span><span class="cov0" title="0">{
+                w.logger.WithError(pubErr).WithField("task_id", task.ID).
+                        Warn("Failed to publish task resumed event")
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// Cancel handles graceful cancellation.
+func (w *MessagingTaskExecutorWrapper) Cancel(ctx context.Context, task *models.BackgroundTask) error <span class="cov0" title="0">{
+        if err := w.executor.Cancel(ctx, task); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        // Publish cancelled event
+        <span class="cov0" title="0">task.Status = models.TaskStatusCancelled
+        if pubErr := w.publisher.PublishTaskCancelled(ctx, task); pubErr != nil </span><span class="cov0" title="0">{
+                w.logger.WithError(pubErr).WithField("task_id", task.ID).
+                        Warn("Failed to publish task cancelled event")
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// GetResourceRequirements returns resource needs for this executor.
+func (w *MessagingTaskExecutorWrapper) GetResourceRequirements() ResourceRequirements <span class="cov0" title="0">{
+        return w.executor.GetResourceRequirements()
+}</span>
+
+// SetupMessagingForWorkerPool configures messaging integration for a worker pool.
+// This is a convenience function to wire up all the messaging components.
+func SetupMessagingForWorkerPool(
+        pool WorkerPool,
+        queue TaskQueue,
+        publisher EventPublisher,
+        logger Logger,
+        config *MessagingTaskQueueConfig,
+) (*MessagingTaskQueue, error) <span class="cov0" title="0">{
+        // Create messaging task queue
+        msgQueue := NewMessagingTaskQueue(queue, publisher, logger, config)
+        msgQueue.Start()
+
+        return msgQueue, nil
+}</span>
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package background
+
+import (
+        "sync"
+
+        "github.com/prometheus/client_golang/prometheus"
+        "github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+// WorkerPoolMetrics holds Prometheus metrics for the worker pool
+type WorkerPoolMetrics struct {
+        // Worker metrics
+        WorkersActive prometheus.Gauge
+        WorkersTotal  prometheus.Gauge
+        ScalingEvents *prometheus.CounterVec
+
+        // Task metrics
+        TasksTotal      *prometheus.CounterVec
+        TasksInQueue    *prometheus.GaugeVec
+        TaskDuration    *prometheus.HistogramVec
+        TaskRetries     *prometheus.CounterVec
+        StuckTasks      prometheus.Counter
+        DeadLetterTasks prometheus.Counter
+
+        // Resource metrics
+        TaskCPUPercent   *prometheus.GaugeVec
+        TaskMemoryBytes  *prometheus.GaugeVec
+        TaskIOReadBytes  *prometheus.GaugeVec
+        TaskIOWriteBytes *prometheus.GaugeVec
+        TaskNetBytesSent *prometheus.GaugeVec
+        TaskNetBytesRecv *prometheus.GaugeVec
+
+        // Notification metrics
+        NotificationsSent   *prometheus.CounterVec
+        NotificationErrors  *prometheus.CounterVec
+        NotificationLatency *prometheus.HistogramVec
+
+        // Queue metrics
+        QueueDepth     *prometheus.GaugeVec
+        DequeueLatency prometheus.Histogram
+        EnqueueLatency prometheus.Histogram
+}
+
+// NewWorkerPoolMetrics creates a new WorkerPoolMetrics with registered metrics
+func NewWorkerPoolMetrics() *WorkerPoolMetrics <span class="cov8" title="1">{
+        return &amp;WorkerPoolMetrics{
+                // Worker metrics
+                WorkersActive: promauto.NewGauge(prometheus.GaugeOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "workers_active",
+                        Help:      "Number of currently active workers",
+                }),
+
+                WorkersTotal: promauto.NewGauge(prometheus.GaugeOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "workers_total",
+                        Help:      "Total number of workers (active and idle)",
+                }),
+
+                ScalingEvents: promauto.NewCounterVec(prometheus.CounterOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "scaling_events_total",
+                        Help:      "Total number of worker scaling events",
+                }, []string{"direction"}), // direction: up, down
+
+                // Task metrics
+                TasksTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "tasks_total",
+                        Help:      "Total number of tasks processed",
+                }, []string{"task_type", "status"}), // status: completed, failed, cancelled
+
+                TasksInQueue: promauto.NewGaugeVec(prometheus.GaugeOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "tasks_in_queue",
+                        Help:      "Number of tasks currently in queue by priority",
+                }, []string{"priority"}),
+
+                TaskDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "task_duration_seconds",
+                        Help:      "Task execution duration in seconds",
+                        Buckets:   []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800, 3600},
+                }, []string{"task_type"}),
+
+                TaskRetries: promauto.NewCounterVec(prometheus.CounterOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "task_retries_total",
+                        Help:      "Total number of task retries",
+                }, []string{"task_type"}),
+
+                StuckTasks: promauto.NewCounter(prometheus.CounterOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "stuck_tasks_total",
+                        Help:      "Total number of tasks detected as stuck",
+                }),
+
+                DeadLetterTasks: promauto.NewCounter(prometheus.CounterOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "dead_letter_tasks_total",
+                        Help:      "Total number of tasks moved to dead letter queue",
+                }),
+
+                // Resource metrics
+                TaskCPUPercent: promauto.NewGaugeVec(prometheus.GaugeOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "task_cpu_percent",
+                        Help:      "CPU usage percentage for a task",
+                }, []string{"task_id"}),
+
+                TaskMemoryBytes: promauto.NewGaugeVec(prometheus.GaugeOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "task_memory_bytes",
+                        Help:      "Memory usage in bytes for a task",
+                }, []string{"task_id"}),
+
+                TaskIOReadBytes: promauto.NewGaugeVec(prometheus.GaugeOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "task_io_read_bytes",
+                        Help:      "I/O bytes read for a task",
+                }, []string{"task_id"}),
+
+                TaskIOWriteBytes: promauto.NewGaugeVec(prometheus.GaugeOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "task_io_write_bytes",
+                        Help:      "I/O bytes written for a task",
+                }, []string{"task_id"}),
+
+                TaskNetBytesSent: promauto.NewGaugeVec(prometheus.GaugeOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "task_net_bytes_sent",
+                        Help:      "Network bytes sent for a task",
+                }, []string{"task_id"}),
+
+                TaskNetBytesRecv: promauto.NewGaugeVec(prometheus.GaugeOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "task_net_bytes_recv",
+                        Help:      "Network bytes received for a task",
+                }, []string{"task_id"}),
+
+                // Notification metrics
+                NotificationsSent: promauto.NewCounterVec(prometheus.CounterOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "notifications_sent_total",
+                        Help:      "Total number of notifications sent",
+                }, []string{"type", "event"}), // type: webhook, sse, websocket, polling
+
+                NotificationErrors: promauto.NewCounterVec(prometheus.CounterOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "notification_errors_total",
+                        Help:      "Total number of notification errors",
+                }, []string{"type"}),
+
+                NotificationLatency: promauto.NewHistogramVec(prometheus.HistogramOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "notification_latency_seconds",
+                        Help:      "Notification delivery latency in seconds",
+                        Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+                }, []string{"type"}),
+
+                // Queue metrics
+                QueueDepth: promauto.NewGaugeVec(prometheus.GaugeOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "queue_depth",
+                        Help:      "Number of tasks in queue by priority",
+                }, []string{"priority"}),
+
+                DequeueLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "dequeue_latency_seconds",
+                        Help:      "Time taken to dequeue a task in seconds",
+                        Buckets:   []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5},
+                }),
+
+                EnqueueLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+                        Namespace: "helixagent",
+                        Subsystem: "background",
+                        Name:      "enqueue_latency_seconds",
+                        Help:      "Time taken to enqueue a task in seconds",
+                        Buckets:   []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5},
+                }),
+        }
+}</span>
+
+// RecordResourceSnapshot records resource usage metrics for a task
+func (m *WorkerPoolMetrics) RecordResourceSnapshot(taskID string, cpuPercent float64, memoryBytes int64, ioReadBytes, ioWriteBytes, netBytesSent, netBytesRecv int64) <span class="cov0" title="0">{
+        m.TaskCPUPercent.WithLabelValues(taskID).Set(cpuPercent)
+        m.TaskMemoryBytes.WithLabelValues(taskID).Set(float64(memoryBytes))
+        m.TaskIOReadBytes.WithLabelValues(taskID).Set(float64(ioReadBytes))
+        m.TaskIOWriteBytes.WithLabelValues(taskID).Set(float64(ioWriteBytes))
+        m.TaskNetBytesSent.WithLabelValues(taskID).Set(float64(netBytesSent))
+        m.TaskNetBytesRecv.WithLabelValues(taskID).Set(float64(netBytesRecv))
+}</span>
+
+// CleanupTaskMetrics removes metrics for a completed/failed task
+func (m *WorkerPoolMetrics) CleanupTaskMetrics(taskID string) <span class="cov0" title="0">{
+        m.TaskCPUPercent.DeleteLabelValues(taskID)
+        m.TaskMemoryBytes.DeleteLabelValues(taskID)
+        m.TaskIOReadBytes.DeleteLabelValues(taskID)
+        m.TaskIOWriteBytes.DeleteLabelValues(taskID)
+        m.TaskNetBytesSent.DeleteLabelValues(taskID)
+        m.TaskNetBytesRecv.DeleteLabelValues(taskID)
+}</span>
+
+// UpdateQueueDepth updates queue depth metrics from a map
+func (m *WorkerPoolMetrics) UpdateQueueDepth(depths map[string]int64) <span class="cov0" title="0">{
+        for priority, count := range depths </span><span class="cov0" title="0">{
+                m.QueueDepth.WithLabelValues(priority).Set(float64(count))
+        }</span>
+}
+
+// Global metrics instance for packages that don't have access to WorkerPool
+var (
+        globalMetrics     *WorkerPoolMetrics
+        globalMetricsOnce sync.Once
+)
+
+// GetGlobalMetrics returns the global metrics instance, creating if necessary
+func GetGlobalMetrics() *WorkerPoolMetrics <span class="cov0" title="0">{
+        globalMetricsOnce.Do(func() </span><span class="cov0" title="0">{
+                if globalMetrics == nil </span><span class="cov0" title="0">{
+                        globalMetrics = NewWorkerPoolMetrics()
+                }</span>
+        })
+        <span class="cov0" title="0">return globalMetrics</span>
+}
+
+// SetGlobalMetrics sets the global metrics instance (must be called before GetGlobalMetrics)
+func SetGlobalMetrics(metrics *WorkerPoolMetrics) <span class="cov0" title="0">{
+        globalMetrics = metrics
+}</span>
+</pre>
+		
+		<pre class="file" id="file4" style="display: none">package background
+
+import (
+        "context"
+        "fmt"
+        "runtime"
+        "sync"
+        "time"
+
+        "github.com/shirou/gopsutil/v3/cpu"
+        "github.com/shirou/gopsutil/v3/disk"
+        "github.com/shirou/gopsutil/v3/load"
+        "github.com/shirou/gopsutil/v3/mem"
+        "github.com/shirou/gopsutil/v3/net"
+        "github.com/shirou/gopsutil/v3/process"
+        "github.com/sirupsen/logrus"
+
+        "digital.vasic.models"
+)
+
+// ProcessResourceMonitor implements ResourceMonitor using gopsutil
+type ProcessResourceMonitor struct {
+        repository TaskRepository
+        logger     *logrus.Logger
+
+        monitors map[string]*processMonitor
+        mu       sync.RWMutex
+
+        // Cache for system resources
+        cachedResources  *SystemResources
+        cacheTime        time.Time
+        cacheTTL         time.Duration
+        systemResourceMu sync.RWMutex
+}
+
+type processMonitor struct {
+        taskID       string
+        pid          int
+        interval     time.Duration
+        stopChan     chan struct{}
+        lastSnapshot *models.ResourceSnapshot
+        snapshotMu   sync.RWMutex
+}
+
+// NewProcessResourceMonitor creates a new process resource monitor
+func NewProcessResourceMonitor(repository TaskRepository, logger *logrus.Logger) *ProcessResourceMonitor <span class="cov0" title="0">{
+        return &amp;ProcessResourceMonitor{
+                repository: repository,
+                logger:     logger,
+                monitors:   make(map[string]*processMonitor),
+                cacheTTL:   2 * time.Second,
+        }
+}</span>
+
+// GetSystemResources returns current system resource usage
+func (m *ProcessResourceMonitor) GetSystemResources() (*SystemResources, error) <span class="cov0" title="0">{
+        // Check cache
+        m.systemResourceMu.RLock()
+        if m.cachedResources != nil &amp;&amp; time.Since(m.cacheTime) &lt; m.cacheTTL </span><span class="cov0" title="0">{
+                resources := *m.cachedResources
+                m.systemResourceMu.RUnlock()
+                return &amp;resources, nil
+        }</span>
+        <span class="cov0" title="0">m.systemResourceMu.RUnlock()
+
+        // Get CPU info
+        cpuPercent, err := cpu.Percent(0, false)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to get CPU percent: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">cpuCores, err := cpu.Counts(true)
+        if err != nil </span><span class="cov0" title="0">{
+                cpuCores = runtime.NumCPU()
+        }</span>
+
+        // Get memory info
+        <span class="cov0" title="0">memInfo, err := mem.VirtualMemory()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to get memory info: %w", err)
+        }</span>
+
+        // Get disk info (root partition)
+        <span class="cov0" title="0">diskInfo, err := disk.Usage("/")
+        if err != nil </span><span class="cov0" title="0">{
+                diskInfo = &amp;disk.UsageStat{}
+        }</span>
+
+        // Get load average
+        <span class="cov0" title="0">loadAvg, err := load.Avg()
+        if err != nil </span><span class="cov0" title="0">{
+                loadAvg = &amp;load.AvgStat{}
+        }</span>
+
+        <span class="cov0" title="0">cpuLoad := float64(0)
+        if len(cpuPercent) &gt; 0 </span><span class="cov0" title="0">{
+                cpuLoad = cpuPercent[0]
+        }</span>
+
+        // Note: uint64 to int64 conversions are safe for realistic memory sizes (max ~9 exabytes)
+        <span class="cov0" title="0">resources := &amp;SystemResources{
+                TotalCPUCores:     cpuCores,
+                AvailableCPUCores: float64(cpuCores) * (100 - cpuLoad) / 100,
+                TotalMemoryMB:     int64(memInfo.Total / 1024 / 1024),     // #nosec G115 - memory size in MB fits int64
+                AvailableMemoryMB: int64(memInfo.Available / 1024 / 1024), // #nosec G115 - memory size in MB fits int64
+                CPULoadPercent:    cpuLoad,
+                MemoryUsedPercent: memInfo.UsedPercent,
+                DiskUsedPercent:   diskInfo.UsedPercent,
+                LoadAvg1:          loadAvg.Load1,
+                LoadAvg5:          loadAvg.Load5,
+                LoadAvg15:         loadAvg.Load15,
+        }
+
+        // Update cache
+        m.systemResourceMu.Lock()
+        m.cachedResources = resources
+        m.cacheTime = time.Now()
+        m.systemResourceMu.Unlock()
+
+        return resources, nil</span>
+}
+
+// GetProcessResources returns resource usage for a specific process
+func (m *ProcessResourceMonitor) GetProcessResources(pid int) (*models.ResourceSnapshot, error) <span class="cov0" title="0">{
+        proc, err := process.NewProcess(int32(pid)) // #nosec G115 - process IDs fit in int32
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("process not found: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">snapshot := &amp;models.ResourceSnapshot{
+                SampledAt: time.Now(),
+        }
+
+        // CPU percent
+        cpuPercent, err := proc.CPUPercent()
+        if err == nil </span><span class="cov0" title="0">{
+                snapshot.CPUPercent = cpuPercent
+        }</span>
+
+        // CPU times
+        <span class="cov0" title="0">cpuTimes, err := proc.Times()
+        if err == nil &amp;&amp; cpuTimes != nil </span><span class="cov0" title="0">{
+                snapshot.CPUUserTime = cpuTimes.User
+                snapshot.CPUSystemTime = cpuTimes.System
+        }</span>
+
+        // Memory info - uint64 to int64 is safe for realistic memory sizes
+        <span class="cov0" title="0">memInfo, err := proc.MemoryInfo()
+        if err == nil &amp;&amp; memInfo != nil </span><span class="cov0" title="0">{
+                snapshot.MemoryRSSBytes = int64(memInfo.RSS) // #nosec G115 - memory size fits int64
+                snapshot.MemoryVMSBytes = int64(memInfo.VMS) // #nosec G115 - memory size fits int64
+        }</span>
+
+        // Memory percent
+        <span class="cov0" title="0">memPercent, err := proc.MemoryPercent()
+        if err == nil </span><span class="cov0" title="0">{
+                snapshot.MemoryPercent = float64(memPercent)
+        }</span>
+
+        // I/O counters - uint64 to int64 is safe for realistic I/O amounts
+        <span class="cov0" title="0">ioCounters, err := proc.IOCounters()
+        if err == nil &amp;&amp; ioCounters != nil </span><span class="cov0" title="0">{
+                snapshot.IOReadBytes = int64(ioCounters.ReadBytes)   // #nosec G115 - I/O byte count fits int64
+                snapshot.IOWriteBytes = int64(ioCounters.WriteBytes) // #nosec G115 - I/O byte count fits int64
+                snapshot.IOReadCount = int64(ioCounters.ReadCount)   // #nosec G115 - I/O count fits int64
+                snapshot.IOWriteCount = int64(ioCounters.WriteCount) // #nosec G115 - I/O count fits int64
+        }</span>
+
+        // Network connections
+        <span class="cov0" title="0">connections, err := proc.Connections()
+        if err == nil </span><span class="cov0" title="0">{
+                snapshot.NetConnections = len(connections)
+        }</span>
+
+        // Get network I/O (system-wide, as process-level is harder to get)
+        // uint64 to int64 is safe for realistic network transfer amounts
+        <span class="cov0" title="0">netStats, err := net.IOCounters(false)
+        if err == nil &amp;&amp; len(netStats) &gt; 0 </span><span class="cov0" title="0">{
+                snapshot.NetBytesSent = int64(netStats[0].BytesSent) // #nosec G115 - network bytes fit int64
+                snapshot.NetBytesRecv = int64(netStats[0].BytesRecv) // #nosec G115 - network bytes fit int64
+        }</span>
+
+        // Open files
+        <span class="cov0" title="0">openFiles, err := proc.OpenFiles()
+        if err == nil </span><span class="cov0" title="0">{
+                snapshot.OpenFiles = len(openFiles)
+        }</span>
+
+        // File descriptors
+        <span class="cov0" title="0">fds, err := proc.NumFDs()
+        if err == nil </span><span class="cov0" title="0">{
+                snapshot.OpenFDs = int(fds)
+        }</span>
+
+        // Thread count
+        <span class="cov0" title="0">threads, err := proc.NumThreads()
+        if err == nil </span><span class="cov0" title="0">{
+                snapshot.ThreadCount = int(threads)
+        }</span>
+
+        // Process status
+        <span class="cov0" title="0">status, err := proc.Status()
+        if err == nil &amp;&amp; len(status) &gt; 0 </span><span class="cov0" title="0">{
+                snapshot.ProcessState = status[0]
+        }</span>
+
+        <span class="cov0" title="0">return snapshot, nil</span>
+}
+
+// StartMonitoring begins periodic monitoring of a process
+func (m *ProcessResourceMonitor) StartMonitoring(taskID string, pid int, interval time.Duration) error <span class="cov0" title="0">{
+        m.mu.Lock()
+        defer m.mu.Unlock()
+
+        if _, exists := m.monitors[taskID]; exists </span><span class="cov0" title="0">{
+                return fmt.Errorf("monitoring already started for task %s", taskID)
+        }</span>
+
+        <span class="cov0" title="0">pm := &amp;processMonitor{
+                taskID:   taskID,
+                pid:      pid,
+                interval: interval,
+                stopChan: make(chan struct{}),
+        }
+
+        m.monitors[taskID] = pm
+        go m.monitorLoop(pm)
+
+        m.logger.WithFields(logrus.Fields{
+                "task_id":  taskID,
+                "pid":      pid,
+                "interval": interval,
+        }).Debug("Started process monitoring")
+
+        return nil</span>
+}
+
+// StopMonitoring stops monitoring a process
+func (m *ProcessResourceMonitor) StopMonitoring(taskID string) error <span class="cov0" title="0">{
+        m.mu.Lock()
+        defer m.mu.Unlock()
+
+        pm, exists := m.monitors[taskID]
+        if !exists </span><span class="cov0" title="0">{
+                return nil
+        }</span>
+
+        <span class="cov0" title="0">close(pm.stopChan)
+        delete(m.monitors, taskID)
+
+        m.logger.WithField("task_id", taskID).Debug("Stopped process monitoring")
+
+        return nil</span>
+}
+
+// GetLatestSnapshot returns the most recent snapshot for a task
+func (m *ProcessResourceMonitor) GetLatestSnapshot(taskID string) (*models.ResourceSnapshot, error) <span class="cov0" title="0">{
+        m.mu.RLock()
+        pm, exists := m.monitors[taskID]
+        m.mu.RUnlock()
+
+        if !exists </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("no monitoring active for task %s", taskID)
+        }</span>
+
+        <span class="cov0" title="0">pm.snapshotMu.RLock()
+        defer pm.snapshotMu.RUnlock()
+
+        if pm.lastSnapshot == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("no snapshot available for task %s", taskID)
+        }</span>
+
+        <span class="cov0" title="0">snapshot := *pm.lastSnapshot
+        return &amp;snapshot, nil</span>
+}
+
+// IsResourceAvailable checks if system has enough resources
+func (m *ProcessResourceMonitor) IsResourceAvailable(requirements ResourceRequirements) bool <span class="cov0" title="0">{
+        resources, err := m.GetSystemResources()
+        if err != nil </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        // Check CPU availability
+        <span class="cov0" title="0">if requirements.CPUCores &gt; 0 &amp;&amp; int(resources.AvailableCPUCores) &lt; requirements.CPUCores </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        // Check memory availability
+        <span class="cov0" title="0">if requirements.MemoryMB &gt; 0 &amp;&amp; resources.AvailableMemoryMB &lt; int64(requirements.MemoryMB) </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        // Check overall system load
+        <span class="cov0" title="0">if resources.CPULoadPercent &gt; 90 </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        <span class="cov0" title="0">if resources.MemoryUsedPercent &gt; 90 </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        <span class="cov0" title="0">return true</span>
+}
+
+// monitorLoop periodically samples process resources
+func (m *ProcessResourceMonitor) monitorLoop(pm *processMonitor) <span class="cov0" title="0">{
+        ticker := time.NewTicker(pm.interval)
+        defer ticker.Stop()
+
+        for </span><span class="cov0" title="0">{
+                select </span>{
+                case &lt;-pm.stopChan:<span class="cov0" title="0">
+                        return</span>
+                case &lt;-ticker.C:<span class="cov0" title="0">
+                        snapshot, err := m.GetProcessResources(pm.pid)
+                        if err != nil </span><span class="cov0" title="0">{
+                                m.logger.WithError(err).WithField("task_id", pm.taskID).Debug("Failed to get process resources")
+                                continue</span>
+                        }
+
+                        <span class="cov0" title="0">snapshot.TaskID = pm.taskID
+
+                        // Update last snapshot
+                        pm.snapshotMu.Lock()
+                        pm.lastSnapshot = snapshot
+                        pm.snapshotMu.Unlock()
+
+                        // Save to repository
+                        if m.repository != nil </span><span class="cov0" title="0">{
+                                if err := m.repository.SaveResourceSnapshot(context.Background(), snapshot); err != nil </span><span class="cov0" title="0">{
+                                        m.logger.WithError(err).WithField("task_id", pm.taskID).Debug("Failed to save resource snapshot")
+                                }</span>
+                        }
+                }
+        }
+}
+
+// MockResourceMonitor is defined in resource_monitor_test_helpers.go
+// to maintain separation between production and test code.
+</pre>
+		
+		<pre class="file" id="file5" style="display: none">package background
+
+import (
+        "sync"
+        "time"
+
+        "digital.vasic.models"
+)
+
+// MockResourceMonitor provides a mock implementation for testing.
+// This should only be used in tests, not in production code.
+type MockResourceMonitor struct {
+        systemResources  *SystemResources
+        processResources map[int]*models.ResourceSnapshot
+        mu               sync.RWMutex
+}
+
+// NewMockResourceMonitor creates a new mock resource monitor with default values
+func NewMockResourceMonitor() *MockResourceMonitor <span class="cov0" title="0">{
+        return &amp;MockResourceMonitor{
+                systemResources: &amp;SystemResources{
+                        TotalCPUCores:     8,
+                        AvailableCPUCores: 6,
+                        TotalMemoryMB:     16384,
+                        AvailableMemoryMB: 8192,
+                        CPULoadPercent:    25,
+                        MemoryUsedPercent: 50,
+                },
+                processResources: make(map[int]*models.ResourceSnapshot),
+        }
+}</span>
+
+// GetSystemResources returns the mock system resources
+func (m *MockResourceMonitor) GetSystemResources() (*SystemResources, error) <span class="cov0" title="0">{
+        m.mu.RLock()
+        defer m.mu.RUnlock()
+        resources := *m.systemResources
+        return &amp;resources, nil
+}</span>
+
+// GetProcessResources returns mock resources for a process
+func (m *MockResourceMonitor) GetProcessResources(pid int) (*models.ResourceSnapshot, error) <span class="cov0" title="0">{
+        m.mu.RLock()
+        defer m.mu.RUnlock()
+
+        if snapshot, exists := m.processResources[pid]; exists </span><span class="cov0" title="0">{
+                return snapshot, nil
+        }</span>
+
+        <span class="cov0" title="0">return &amp;models.ResourceSnapshot{
+                CPUPercent:     10,
+                MemoryRSSBytes: 100 * 1024 * 1024,
+                MemoryPercent:  5,
+                SampledAt:      time.Now(),
+        }, nil</span>
+}
+
+// StartMonitoring is a no-op for mock
+func (m *MockResourceMonitor) StartMonitoring(taskID string, pid int, interval time.Duration) error <span class="cov0" title="0">{
+        return nil
+}</span>
+
+// StopMonitoring is a no-op for mock
+func (m *MockResourceMonitor) StopMonitoring(taskID string) error <span class="cov0" title="0">{
+        return nil
+}</span>
+
+// GetLatestSnapshot returns a mock snapshot for the task
+func (m *MockResourceMonitor) GetLatestSnapshot(taskID string) (*models.ResourceSnapshot, error) <span class="cov0" title="0">{
+        return &amp;models.ResourceSnapshot{
+                TaskID:         taskID,
+                CPUPercent:     10,
+                MemoryRSSBytes: 100 * 1024 * 1024,
+                SampledAt:      time.Now(),
+        }, nil
+}</span>
+
+// IsResourceAvailable always returns true for mock
+func (m *MockResourceMonitor) IsResourceAvailable(requirements ResourceRequirements) bool <span class="cov0" title="0">{
+        return true
+}</span>
+
+// SetSystemResources sets the mock system resources for testing
+func (m *MockResourceMonitor) SetSystemResources(resources *SystemResources) <span class="cov0" title="0">{
+        m.mu.Lock()
+        defer m.mu.Unlock()
+        m.systemResources = resources
+}</span>
+
+// SetProcessResources sets mock resources for a process for testing
+func (m *MockResourceMonitor) SetProcessResources(pid int, snapshot *models.ResourceSnapshot) <span class="cov0" title="0">{
+        m.mu.Lock()
+        defer m.mu.Unlock()
+        m.processResources[pid] = snapshot
+}</span>
+
+// SetResourceAvailable allows configuring whether resources are available (for testing edge cases)
+func (m *MockResourceMonitor) SetResourceAvailable(available bool) {<span class="cov0" title="0">
+        // This is a placeholder for more sophisticated mock behavior
+        // The current implementation always returns true from IsResourceAvailable
+}</span>
+</pre>
+		
+		<pre class="file" id="file6" style="display: none">package background
+
+import (
+        "context"
+        "fmt"
+        "sync"
+        "time"
+
+        "github.com/sirupsen/logrus"
+
+        "digital.vasic.models"
+)
+
+// DefaultStuckDetector implements stuck detection algorithms
+type DefaultStuckDetector struct {
+        logger     *logrus.Logger
+        thresholds map[string]time.Duration
+        mu         sync.RWMutex
+}
+
+// StuckDetectorConfig holds configuration for stuck detection
+type StuckDetectorConfig struct {
+        DefaultThreshold        time.Duration `yaml:"default_threshold"`
+        CPUActivityThreshold    float64       `yaml:"cpu_activity_threshold"`
+        MemoryGrowthThreshold   float64       `yaml:"memory_growth_threshold"`
+        IOActivityThreshold     int64         `yaml:"io_activity_threshold"`
+        MinSnapshotsForAnalysis int           `yaml:"min_snapshots_for_analysis"`
+}
+
+// DefaultStuckDetectorConfig returns default configuration
+func DefaultStuckDetectorConfig() *StuckDetectorConfig <span class="cov0" title="0">{
+        return &amp;StuckDetectorConfig{
+                DefaultThreshold:        5 * time.Minute,
+                CPUActivityThreshold:    0.1,  // 0.1% CPU
+                MemoryGrowthThreshold:   0.5,  // 50% growth rate
+                IOActivityThreshold:     1024, // 1KB
+                MinSnapshotsForAnalysis: 3,
+        }
+}</span>
+
+// NewDefaultStuckDetector creates a new stuck detector
+func NewDefaultStuckDetector(logger *logrus.Logger) *DefaultStuckDetector <span class="cov0" title="0">{
+        return &amp;DefaultStuckDetector{
+                logger: logger,
+                thresholds: map[string]time.Duration{
+                        "default":   5 * time.Minute,
+                        "command":   3 * time.Minute,
+                        "llm_call":  3 * time.Minute,
+                        "debate":    10 * time.Minute,
+                        "embedding": 2 * time.Minute,
+                        "endless":   0, // No automatic stuck detection for endless tasks
+                },
+        }
+}</span>
+
+// IsStuck determines if a task is stuck based on various criteria
+func (d *DefaultStuckDetector) IsStuck(ctx context.Context, task *models.BackgroundTask, snapshots []*models.ResourceSnapshot) (bool, string) <span class="cov0" title="0">{
+        if task == nil </span><span class="cov0" title="0">{
+                return false, ""
+        }</span>
+
+        // Endless tasks use different detection
+        <span class="cov0" title="0">if task.Config.Endless </span><span class="cov0" title="0">{
+                return d.isEndlessTaskStuck(task, snapshots)
+        }</span>
+
+        // Check heartbeat timeout
+        <span class="cov0" title="0">if reason := d.checkHeartbeatTimeout(task); reason != "" </span><span class="cov0" title="0">{
+                return true, reason
+        }</span>
+
+        // Check deadline exceeded
+        <span class="cov0" title="0">if task.IsOverdue() </span><span class="cov0" title="0">{
+                return true, "task exceeded deadline"
+        }</span>
+
+        // If we have resource snapshots, perform deeper analysis
+        <span class="cov0" title="0">if len(snapshots) &gt;= 3 </span><span class="cov0" title="0">{
+                // Check for frozen process (no CPU activity)
+                if d.isProcessFrozen(snapshots) </span><span class="cov0" title="0">{
+                        return true, "process appears frozen (no CPU activity)"
+                }</span>
+
+                // Check for resource exhaustion
+                <span class="cov0" title="0">if reason := d.checkResourceExhaustion(snapshots); reason != "" </span><span class="cov0" title="0">{
+                        return true, reason
+                }</span>
+
+                // Check for I/O starvation
+                <span class="cov0" title="0">if d.isIOStarved(snapshots) </span><span class="cov0" title="0">{
+                        return true, "process appears I/O starved"
+                }</span>
+
+                // Check for network hang
+                <span class="cov0" title="0">if d.isNetworkHung(snapshots) </span><span class="cov0" title="0">{
+                        return true, "process appears hung on network I/O"
+                }</span>
+
+                // Check for memory leak
+                <span class="cov0" title="0">if d.hasMemoryLeak(snapshots) </span><span class="cov0" title="0">{
+                        return true, "potential memory leak detected"
+                }</span>
+        }
+
+        <span class="cov0" title="0">return false, ""</span>
+}
+
+// GetStuckThreshold returns the stuck detection threshold for a task type
+func (d *DefaultStuckDetector) GetStuckThreshold(taskType string) time.Duration <span class="cov0" title="0">{
+        d.mu.RLock()
+        defer d.mu.RUnlock()
+
+        if threshold, exists := d.thresholds[taskType]; exists </span><span class="cov0" title="0">{
+                return threshold
+        }</span>
+        <span class="cov0" title="0">return d.thresholds["default"]</span>
+}
+
+// SetThreshold sets a custom threshold for a task type
+func (d *DefaultStuckDetector) SetThreshold(taskType string, threshold time.Duration) <span class="cov0" title="0">{
+        d.mu.Lock()
+        defer d.mu.Unlock()
+        d.thresholds[taskType] = threshold
+}</span>
+
+// checkHeartbeatTimeout checks if the task has exceeded heartbeat timeout
+func (d *DefaultStuckDetector) checkHeartbeatTimeout(task *models.BackgroundTask) string <span class="cov0" title="0">{
+        threshold := d.GetStuckThreshold(task.TaskType)
+        if threshold == 0 </span><span class="cov0" title="0">{
+                return "" // No timeout for endless tasks
+        }</span>
+
+        // Use task config threshold if set
+        <span class="cov0" title="0">if task.Config.StuckThresholdSecs &gt; 0 </span><span class="cov0" title="0">{
+                threshold = time.Duration(task.Config.StuckThresholdSecs) * time.Second
+        }</span>
+
+        <span class="cov0" title="0">if task.HasStaleHeartbeat(threshold) </span><span class="cov0" title="0">{
+                if task.LastHeartbeat == nil </span><span class="cov0" title="0">{
+                        return fmt.Sprintf("no heartbeat ever received (threshold: %v)", threshold)
+                }</span>
+                <span class="cov0" title="0">return fmt.Sprintf("no heartbeat for %v (threshold: %v)", time.Since(*task.LastHeartbeat).Round(time.Second), threshold)</span>
+        }
+
+        <span class="cov0" title="0">return ""</span>
+}
+
+// isProcessFrozen checks if CPU activity has stopped
+func (d *DefaultStuckDetector) isProcessFrozen(snapshots []*models.ResourceSnapshot) bool <span class="cov0" title="0">{
+        if len(snapshots) &lt; 3 </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        // Check if CPU is consistently at 0 across recent snapshots
+        <span class="cov0" title="0">zeroCount := 0
+        for i := 0; i &lt; min3(5, len(snapshots)); i++ </span><span class="cov0" title="0">{
+                if snapshots[i].CPUPercent &lt; 0.1 </span><span class="cov0" title="0">{
+                        zeroCount++
+                }</span>
+        }
+
+        <span class="cov0" title="0">if zeroCount &lt; 3 </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        // Also check if CPU time has increased
+        <span class="cov0" title="0">if len(snapshots) &gt;= 2 </span><span class="cov0" title="0">{
+                latest := snapshots[0]
+                older := snapshots[len(snapshots)-1]
+                cpuTimeIncrease := (latest.CPUUserTime + latest.CPUSystemTime) -
+                        (older.CPUUserTime + older.CPUSystemTime)
+                if cpuTimeIncrease &gt; 0.01 </span><span class="cov0" title="0">{
+                        return false
+                }</span>
+        }
+
+        <span class="cov0" title="0">return true</span>
+}
+
+// checkResourceExhaustion checks for memory issues
+func (d *DefaultStuckDetector) checkResourceExhaustion(snapshots []*models.ResourceSnapshot) string <span class="cov0" title="0">{
+        if len(snapshots) == 0 </span><span class="cov0" title="0">{
+                return ""
+        }</span>
+
+        <span class="cov0" title="0">latest := snapshots[0]
+
+        // Check for memory exhaustion (&gt; 95% memory)
+        if latest.MemoryPercent &gt; 95 </span><span class="cov0" title="0">{
+                return fmt.Sprintf("memory exhaustion: %.1f%% used", latest.MemoryPercent)
+        }</span>
+
+        // Check for file descriptor exhaustion
+        <span class="cov0" title="0">if latest.OpenFDs &gt; 10000 </span><span class="cov0" title="0">{
+                return fmt.Sprintf("file descriptor exhaustion: %d open", latest.OpenFDs)
+        }</span>
+
+        // Check for excessive thread count
+        <span class="cov0" title="0">if latest.ThreadCount &gt; 1000 </span><span class="cov0" title="0">{
+                return fmt.Sprintf("excessive threads: %d", latest.ThreadCount)
+        }</span>
+
+        <span class="cov0" title="0">return ""</span>
+}
+
+// isIOStarved checks for I/O starvation patterns
+func (d *DefaultStuckDetector) isIOStarved(snapshots []*models.ResourceSnapshot) bool <span class="cov0" title="0">{
+        if len(snapshots) &lt; 3 </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        <span class="cov0" title="0">latest := snapshots[0]
+        oldest := snapshots[min3(3, len(snapshots)-1)]
+
+        // If there are no I/O operations but the process is supposedly doing something
+        ioActivity := (latest.IOReadBytes - oldest.IOReadBytes) +
+                (latest.IOWriteBytes - oldest.IOWriteBytes)
+
+        // If CPU is active but no I/O for multiple samples, might be stuck
+        if ioActivity == 0 &amp;&amp; latest.CPUPercent &lt; 1.0 &amp;&amp; latest.CPUPercent &gt; 0 </span><span class="cov0" title="0">{
+                return true
+        }</span>
+
+        <span class="cov0" title="0">return false</span>
+}
+
+// isNetworkHung checks for network hang patterns
+func (d *DefaultStuckDetector) isNetworkHung(snapshots []*models.ResourceSnapshot) bool <span class="cov0" title="0">{
+        if len(snapshots) &lt; 3 </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        <span class="cov0" title="0">latest := snapshots[0]
+        oldest := snapshots[min3(3, len(snapshots)-1)]
+
+        // Check for active connections with no data transfer
+        if latest.NetConnections &gt; 0 </span><span class="cov0" title="0">{
+                netActivity := (latest.NetBytesSent - oldest.NetBytesSent) +
+                        (latest.NetBytesRecv - oldest.NetBytesRecv)
+
+                if netActivity == 0 &amp;&amp; latest.CPUPercent &lt; 1.0 </span><span class="cov0" title="0">{
+                        return true
+                }</span>
+        }
+
+        <span class="cov0" title="0">return false</span>
+}
+
+// hasMemoryLeak detects potential memory leaks
+func (d *DefaultStuckDetector) hasMemoryLeak(snapshots []*models.ResourceSnapshot) bool <span class="cov0" title="0">{
+        if len(snapshots) &lt; 5 </span><span class="cov0" title="0">{
+                return false
+        }</span>
+
+        // Check if memory is monotonically increasing
+        <span class="cov0" title="0">increasing := 0
+        for i := 0; i &lt; len(snapshots)-1; i++ </span><span class="cov0" title="0">{
+                if snapshots[i].MemoryRSSBytes &gt; snapshots[i+1].MemoryRSSBytes </span><span class="cov0" title="0">{
+                        increasing++
+                }</span>
+        }
+
+        // If memory increased in most samples, potential leak
+        <span class="cov0" title="0">if float64(increasing)/float64(len(snapshots)-1) &gt; 0.8 </span><span class="cov0" title="0">{
+                // Check growth rate
+                oldest := snapshots[len(snapshots)-1]
+                latest := snapshots[0]
+
+                if oldest.MemoryRSSBytes &gt; 0 </span><span class="cov0" title="0">{
+                        growthRate := float64(latest.MemoryRSSBytes-oldest.MemoryRSSBytes) / float64(oldest.MemoryRSSBytes)
+                        if growthRate &gt; 0.5 </span><span class="cov0" title="0">{ // 50% growth
+                                return true
+                        }</span>
+                }
+        }
+
+        <span class="cov0" title="0">return false</span>
+}
+
+// isEndlessTaskStuck uses different criteria for endless tasks
+func (d *DefaultStuckDetector) isEndlessTaskStuck(task *models.BackgroundTask, snapshots []*models.ResourceSnapshot) (bool, string) <span class="cov0" title="0">{
+        // For endless tasks, only check for:
+        // 1. Process death (zombie state)
+        // 2. Severe resource exhaustion
+        // 3. Complete hang (no activity at all)
+
+        if len(snapshots) == 0 </span><span class="cov0" title="0">{
+                return false, ""
+        }</span>
+
+        <span class="cov0" title="0">latest := snapshots[0]
+
+        // Check process state
+        if latest.ProcessState == "zombie" || latest.ProcessState == "Z" </span><span class="cov0" title="0">{
+                return true, "process is in zombie state"
+        }</span>
+
+        // Check severe memory exhaustion
+        <span class="cov0" title="0">if latest.MemoryPercent &gt; 98 </span><span class="cov0" title="0">{
+                return true, "critical memory exhaustion (&gt;98%)"
+        }</span>
+
+        // Check complete activity halt (needs multiple samples)
+        <span class="cov0" title="0">if len(snapshots) &gt;= 5 </span><span class="cov0" title="0">{
+                activityDetected := false
+                for i := 0; i &lt; 5; i++ </span><span class="cov0" title="0">{
+                        if snapshots[i].CPUPercent &gt; 0 ||
+                                (i &gt; 0 &amp;&amp; (snapshots[i].IOReadBytes != snapshots[i-1].IOReadBytes ||
+                                        snapshots[i].IOWriteBytes != snapshots[i-1].IOWriteBytes)) </span><span class="cov0" title="0">{
+                                activityDetected = true
+                                break</span>
+                        }
+                }
+
+                <span class="cov0" title="0">if !activityDetected </span><span class="cov0" title="0">{
+                        return true, "endless process has no activity"
+                }</span>
+        }
+
+        <span class="cov0" title="0">return false, ""</span>
+}
+
+// StuckAnalysis provides detailed analysis of why a task might be stuck
+type StuckAnalysis struct {
+        IsStuck         bool            `json:"is_stuck"`
+        Reason          string          `json:"reason,omitempty"`
+        HeartbeatStatus HeartbeatStatus `json:"heartbeat_status"`
+        ResourceStatus  ResourceStatus  `json:"resource_status"`
+        ActivityStatus  ActivityStatus  `json:"activity_status"`
+        Recommendations []string        `json:"recommendations,omitempty"`
+}
+
+type HeartbeatStatus struct {
+        LastHeartbeat      *time.Time    `json:"last_heartbeat,omitempty"`
+        TimeSinceHeartbeat time.Duration `json:"time_since_heartbeat,omitempty"`
+        Threshold          time.Duration `json:"threshold"`
+        IsStale            bool          `json:"is_stale"`
+}
+
+type ResourceStatus struct {
+        CPUPercent    float64 `json:"cpu_percent"`
+        MemoryPercent float64 `json:"memory_percent"`
+        MemoryBytes   int64   `json:"memory_bytes"`
+        OpenFDs       int     `json:"open_fds"`
+        ThreadCount   int     `json:"thread_count"`
+        IsExhausted   bool    `json:"is_exhausted"`
+}
+
+type ActivityStatus struct {
+        HasCPUActivity bool  `json:"has_cpu_activity"`
+        HasIOActivity  bool  `json:"has_io_activity"`
+        HasNetActivity bool  `json:"has_net_activity"`
+        IOReadBytes    int64 `json:"io_read_bytes"`
+        IOWriteBytes   int64 `json:"io_write_bytes"`
+        NetConnections int   `json:"net_connections"`
+}
+
+// AnalyzeTask performs detailed stuck analysis on a task
+func (d *DefaultStuckDetector) AnalyzeTask(ctx context.Context, task *models.BackgroundTask, snapshots []*models.ResourceSnapshot) *StuckAnalysis <span class="cov0" title="0">{
+        analysis := &amp;StuckAnalysis{
+                Recommendations: make([]string, 0),
+        }
+
+        // Check heartbeat
+        threshold := d.GetStuckThreshold(task.TaskType)
+        analysis.HeartbeatStatus = HeartbeatStatus{
+                LastHeartbeat: task.LastHeartbeat,
+                Threshold:     threshold,
+        }
+
+        if task.LastHeartbeat != nil </span><span class="cov0" title="0">{
+                analysis.HeartbeatStatus.TimeSinceHeartbeat = time.Since(*task.LastHeartbeat)
+                analysis.HeartbeatStatus.IsStale = task.HasStaleHeartbeat(threshold)
+        }</span> else<span class="cov0" title="0"> {
+                analysis.HeartbeatStatus.IsStale = true
+        }</span>
+
+        // Analyze resources if we have snapshots
+        <span class="cov0" title="0">if len(snapshots) &gt; 0 </span><span class="cov0" title="0">{
+                latest := snapshots[0]
+                analysis.ResourceStatus = ResourceStatus{
+                        CPUPercent:    latest.CPUPercent,
+                        MemoryPercent: latest.MemoryPercent,
+                        MemoryBytes:   latest.MemoryRSSBytes,
+                        OpenFDs:       latest.OpenFDs,
+                        ThreadCount:   latest.ThreadCount,
+                }
+
+                // Check for exhaustion
+                if latest.MemoryPercent &gt; 90 || latest.OpenFDs &gt; 10000 </span><span class="cov0" title="0">{
+                        analysis.ResourceStatus.IsExhausted = true
+                        if latest.MemoryPercent &gt; 90 </span><span class="cov0" title="0">{
+                                analysis.Recommendations = append(analysis.Recommendations, "Consider increasing memory limits")
+                        }</span>
+                        <span class="cov0" title="0">if latest.OpenFDs &gt; 10000 </span><span class="cov0" title="0">{
+                                analysis.Recommendations = append(analysis.Recommendations, "Check for file descriptor leaks")
+                        }</span>
+                }
+
+                // Analyze activity
+                <span class="cov0" title="0">analysis.ActivityStatus = ActivityStatus{
+                        HasCPUActivity: latest.CPUPercent &gt; 0.1,
+                        IOReadBytes:    latest.IOReadBytes,
+                        IOWriteBytes:   latest.IOWriteBytes,
+                        NetConnections: latest.NetConnections,
+                }
+
+                if len(snapshots) &gt;= 2 </span><span class="cov0" title="0">{
+                        prev := snapshots[1]
+                        analysis.ActivityStatus.HasIOActivity = latest.IOReadBytes != prev.IOReadBytes ||
+                                latest.IOWriteBytes != prev.IOWriteBytes
+                        analysis.ActivityStatus.HasNetActivity = latest.NetBytesSent != prev.NetBytesSent ||
+                                latest.NetBytesRecv != prev.NetBytesRecv
+                }</span>
+        }
+
+        // Determine if stuck
+        <span class="cov0" title="0">isStuck, reason := d.IsStuck(ctx, task, snapshots)
+        analysis.IsStuck = isStuck
+        analysis.Reason = reason
+
+        // Add recommendations
+        if isStuck </span><span class="cov0" title="0">{
+                if analysis.HeartbeatStatus.IsStale </span><span class="cov0" title="0">{
+                        analysis.Recommendations = append(analysis.Recommendations, "Task may need to be cancelled and restarted")
+                }</span>
+                <span class="cov0" title="0">if !analysis.ActivityStatus.HasCPUActivity &amp;&amp; !analysis.ActivityStatus.HasIOActivity </span><span class="cov0" title="0">{
+                        analysis.Recommendations = append(analysis.Recommendations, "Process appears completely idle - check for deadlock")
+                }</span>
+        }
+
+        <span class="cov0" title="0">return analysis</span>
+}
+
+func min3(a, b int) int <span class="cov0" title="0">{
+        if a &lt; b </span><span class="cov0" title="0">{
+                return a
+        }</span>
+        <span class="cov0" title="0">return b</span>
+}
+</pre>
+		
+		<pre class="file" id="file7" style="display: none">package background
+
+import (
+        "context"
+        "encoding/json"
+        "fmt"
+        "sync"
+        "time"
+
+        "github.com/sirupsen/logrus"
+
+        "digital.vasic.models"
+)
+
+// PostgresTaskQueue implements TaskQueue using PostgreSQL
+type PostgresTaskQueue struct {
+        repository TaskRepository
+        logger     *logrus.Logger
+        mu         sync.RWMutex
+
+        // In-memory cache for queue depth (updated periodically)
+        cachedDepth    map[models.TaskPriority]int64
+        depthCacheTime time.Time
+        depthCacheTTL  time.Duration
+}
+
+// NewPostgresTaskQueue creates a new PostgreSQL-backed task queue
+func NewPostgresTaskQueue(repository TaskRepository, logger *logrus.Logger) *PostgresTaskQueue <span class="cov0" title="0">{
+        return &amp;PostgresTaskQueue{
+                repository:    repository,
+                logger:        logger,
+                cachedDepth:   make(map[models.TaskPriority]int64),
+                depthCacheTTL: 5 * time.Second,
+        }
+}</span>
+
+// Enqueue adds a task to the queue
+func (q *PostgresTaskQueue) Enqueue(ctx context.Context, task *models.BackgroundTask) error <span class="cov0" title="0">{
+        if task == nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("task cannot be nil")
+        }</span>
+
+        // Ensure task is in pending status
+        <span class="cov0" title="0">if task.Status == "" </span><span class="cov0" title="0">{
+                task.Status = models.TaskStatusPending
+        }</span>
+
+        // Set default priority if not specified
+        <span class="cov0" title="0">if task.Priority == "" </span><span class="cov0" title="0">{
+                task.Priority = models.TaskPriorityNormal
+        }</span>
+
+        // Set scheduled time if not specified
+        <span class="cov0" title="0">if task.ScheduledAt.IsZero() </span><span class="cov0" title="0">{
+                task.ScheduledAt = time.Now()
+        }</span>
+
+        // Create the task in the database
+        <span class="cov0" title="0">if err := q.repository.Create(ctx, task); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to enqueue task: %w", err)
+        }</span>
+
+        // Log the event
+        <span class="cov0" title="0">if err := q.repository.LogEvent(ctx, task.ID, models.TaskEventCreated, map[string]interface{}{
+                "task_type": task.TaskType,
+                "task_name": task.TaskName,
+                "priority":  task.Priority,
+        }, nil); err != nil </span><span class="cov0" title="0">{
+                q.logger.WithError(err).Debug("Failed to log task created event")
+        }</span>
+
+        <span class="cov0" title="0">q.logger.WithFields(logrus.Fields{
+                "task_id":   task.ID,
+                "task_type": task.TaskType,
+                "priority":  task.Priority,
+        }).Debug("Task enqueued")
+
+        // Invalidate cache
+        q.invalidateCache()
+
+        return nil</span>
+}
+
+// Dequeue atomically retrieves and claims a task from the queue
+func (q *PostgresTaskQueue) Dequeue(ctx context.Context, workerID string, requirements ResourceRequirements) (*models.BackgroundTask, error) <span class="cov0" title="0">{
+        maxCPU := requirements.CPUCores
+        maxMem := requirements.MemoryMB
+
+        // Use 0 to indicate no limit
+        if maxCPU &lt;= 0 </span><span class="cov0" title="0">{
+                maxCPU = 0
+        }</span>
+        <span class="cov0" title="0">if maxMem &lt;= 0 </span><span class="cov0" title="0">{
+                maxMem = 0
+        }</span>
+
+        <span class="cov0" title="0">task, err := q.repository.Dequeue(ctx, workerID, maxCPU, maxMem)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to dequeue task: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">if task == nil </span><span class="cov0" title="0">{
+                return nil, nil // No task available
+        }</span>
+
+        // Log the event
+        <span class="cov0" title="0">if err := q.repository.LogEvent(ctx, task.ID, models.TaskEventStarted, map[string]interface{}{
+                "worker_id": workerID,
+        }, &amp;workerID); err != nil </span><span class="cov0" title="0">{
+                q.logger.WithError(err).Debug("Failed to log task started event")
+        }</span>
+
+        <span class="cov0" title="0">q.logger.WithFields(logrus.Fields{
+                "task_id":   task.ID,
+                "worker_id": workerID,
+                "task_type": task.TaskType,
+        }).Debug("Task dequeued")
+
+        // Invalidate cache
+        q.invalidateCache()
+
+        return task, nil</span>
+}
+
+// Peek returns tasks without claiming them
+func (q *PostgresTaskQueue) Peek(ctx context.Context, count int) ([]*models.BackgroundTask, error) <span class="cov0" title="0">{
+        if count &lt;= 0 </span><span class="cov0" title="0">{
+                count = 10
+        }</span>
+
+        <span class="cov0" title="0">return q.repository.GetPendingTasks(ctx, count)</span>
+}
+
+// Requeue returns a task to the queue with optional delay
+func (q *PostgresTaskQueue) Requeue(ctx context.Context, taskID string, delay time.Duration) error <span class="cov0" title="0">{
+        task, err := q.repository.GetByID(ctx, taskID)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to get task: %w", err)
+        }</span>
+
+        // Update task for requeue
+        <span class="cov0" title="0">task.Status = models.TaskStatusPending
+        task.WorkerID = nil
+        task.StartedAt = nil
+        task.LastHeartbeat = nil
+        task.RetryCount++
+
+        // Set scheduled time with delay
+        if delay &gt; 0 </span><span class="cov0" title="0">{
+                scheduledAt := time.Now().Add(delay)
+                task.ScheduledAt = scheduledAt
+        }</span> else<span class="cov0" title="0"> {
+                task.ScheduledAt = time.Now()
+        }</span>
+
+        <span class="cov0" title="0">if err := q.repository.Update(ctx, task); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to update task: %w", err)
+        }</span>
+
+        // Log the event
+        <span class="cov0" title="0">if err := q.repository.LogEvent(ctx, taskID, models.TaskEventRetrying, map[string]interface{}{
+                "retry_count":  task.RetryCount,
+                "delay_ms":     delay.Milliseconds(),
+                "scheduled_at": task.ScheduledAt,
+        }, nil); err != nil </span><span class="cov0" title="0">{
+                q.logger.WithError(err).Debug("Failed to log task retrying event")
+        }</span>
+
+        <span class="cov0" title="0">q.logger.WithFields(logrus.Fields{
+                "task_id":     taskID,
+                "retry_count": task.RetryCount,
+                "delay":       delay,
+        }).Debug("Task requeued")
+
+        // Invalidate cache
+        q.invalidateCache()
+
+        return nil</span>
+}
+
+// MoveToDeadLetter moves a failed task to dead-letter queue
+func (q *PostgresTaskQueue) MoveToDeadLetter(ctx context.Context, taskID string, reason string) error <span class="cov0" title="0">{
+        if err := q.repository.MoveToDeadLetter(ctx, taskID, reason); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to move task to dead letter: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">q.logger.WithFields(logrus.Fields{
+                "task_id": taskID,
+                "reason":  reason,
+        }).Warn("Task moved to dead letter queue")
+
+        // Invalidate cache
+        q.invalidateCache()
+
+        return nil</span>
+}
+
+// GetPendingCount returns the number of pending tasks
+func (q *PostgresTaskQueue) GetPendingCount(ctx context.Context) (int64, error) <span class="cov0" title="0">{
+        counts, err := q.repository.CountByStatus(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                return 0, err
+        }</span>
+
+        <span class="cov0" title="0">return counts[models.TaskStatusPending], nil</span>
+}
+
+// GetRunningCount returns the number of running tasks
+func (q *PostgresTaskQueue) GetRunningCount(ctx context.Context) (int64, error) <span class="cov0" title="0">{
+        counts, err := q.repository.CountByStatus(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                return 0, err
+        }</span>
+
+        <span class="cov0" title="0">return counts[models.TaskStatusRunning], nil</span>
+}
+
+// GetQueueDepth returns counts by priority
+func (q *PostgresTaskQueue) GetQueueDepth(ctx context.Context) (map[models.TaskPriority]int64, error) <span class="cov0" title="0">{
+        q.mu.RLock()
+        if time.Since(q.depthCacheTime) &lt; q.depthCacheTTL &amp;&amp; len(q.cachedDepth) &gt; 0 </span><span class="cov0" title="0">{
+                // Return cached value
+                result := make(map[models.TaskPriority]int64)
+                for k, v := range q.cachedDepth </span><span class="cov0" title="0">{
+                        result[k] = v
+                }</span>
+                <span class="cov0" title="0">q.mu.RUnlock()
+                return result, nil</span>
+        }
+        <span class="cov0" title="0">q.mu.RUnlock()
+
+        // Query pending tasks and count by priority
+        tasks, err := q.repository.GetByStatus(ctx, models.TaskStatusPending, 10000, 0)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">counts := make(map[models.TaskPriority]int64)
+        for _, task := range tasks </span><span class="cov0" title="0">{
+                counts[task.Priority]++
+        }</span>
+
+        // Update cache
+        <span class="cov0" title="0">q.mu.Lock()
+        q.cachedDepth = counts
+        q.depthCacheTime = time.Now()
+        q.mu.Unlock()
+
+        return counts, nil</span>
+}
+
+// invalidateCache invalidates the queue depth cache
+func (q *PostgresTaskQueue) invalidateCache() <span class="cov0" title="0">{
+        q.mu.Lock()
+        q.depthCacheTime = time.Time{}
+        q.mu.Unlock()
+}</span>
+
+// TaskQueueStats holds queue statistics
+type TaskQueueStats struct {
+        PendingCount    int64                         `json:"pending_count"`
+        RunningCount    int64                         `json:"running_count"`
+        DepthByPriority map[models.TaskPriority]int64 `json:"depth_by_priority"`
+        StatusCounts    map[models.TaskStatus]int64   `json:"status_counts"`
+}
+
+// GetStats returns queue statistics
+func (q *PostgresTaskQueue) GetStats(ctx context.Context) (*TaskQueueStats, error) <span class="cov0" title="0">{
+        statusCounts, err := q.repository.CountByStatus(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">depth, err := q.GetQueueDepth(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                depth = make(map[models.TaskPriority]int64)
+        }</span>
+
+        <span class="cov0" title="0">return &amp;TaskQueueStats{
+                PendingCount:    statusCounts[models.TaskStatusPending],
+                RunningCount:    statusCounts[models.TaskStatusRunning],
+                DepthByPriority: depth,
+                StatusCounts:    statusCounts,
+        }, nil</span>
+}
+
+// InMemoryTaskQueue provides an in-memory queue implementation for testing
+type InMemoryTaskQueue struct {
+        tasks  map[string]*models.BackgroundTask
+        queue  []*models.BackgroundTask
+        mu     sync.RWMutex
+        logger *logrus.Logger
+}
+
+// NewInMemoryTaskQueue creates a new in-memory task queue
+func NewInMemoryTaskQueue(logger *logrus.Logger) *InMemoryTaskQueue <span class="cov8" title="1">{
+        return &amp;InMemoryTaskQueue{
+                tasks:  make(map[string]*models.BackgroundTask),
+                queue:  make([]*models.BackgroundTask, 0),
+                logger: logger,
+        }
+}</span>
+
+// Enqueue adds a task to the in-memory queue
+func (q *InMemoryTaskQueue) Enqueue(ctx context.Context, task *models.BackgroundTask) error <span class="cov8" title="1">{
+        q.mu.Lock()
+        defer q.mu.Unlock()
+
+        if task.ID == "" </span><span class="cov0" title="0">{
+                task.ID = fmt.Sprintf("task-%d", time.Now().UnixNano())
+        }</span>
+        <span class="cov8" title="1">task.Status = models.TaskStatusPending
+        task.CreatedAt = time.Now()
+        task.UpdatedAt = time.Now()
+
+        q.tasks[task.ID] = task
+        q.queue = append(q.queue, task)
+
+        // Sort by priority
+        q.sortQueue()
+
+        return nil</span>
+}
+
+// Dequeue retrieves and claims a task
+func (q *InMemoryTaskQueue) Dequeue(ctx context.Context, workerID string, requirements ResourceRequirements) (*models.BackgroundTask, error) <span class="cov8" title="1">{
+        q.mu.Lock()
+        defer q.mu.Unlock()
+
+        for i, task := range q.queue </span><span class="cov8" title="1">{
+                if task.Status == models.TaskStatusPending &amp;&amp; task.ScheduledAt.Before(time.Now()) </span><span class="cov8" title="1">{
+                        // Check resource requirements
+                        if requirements.CPUCores &gt; 0 &amp;&amp; task.RequiredCPUCores &gt; requirements.CPUCores </span><span class="cov0" title="0">{
+                                continue</span>
+                        }
+                        <span class="cov8" title="1">if requirements.MemoryMB &gt; 0 &amp;&amp; task.RequiredMemoryMB &gt; requirements.MemoryMB </span><span class="cov0" title="0">{
+                                continue</span>
+                        }
+
+                        // Claim the task
+                        <span class="cov8" title="1">task.Status = models.TaskStatusRunning
+                        task.WorkerID = &amp;workerID
+                        now := time.Now()
+                        task.StartedAt = &amp;now
+                        task.LastHeartbeat = &amp;now
+                        task.UpdatedAt = now
+
+                        // Remove from queue
+                        q.queue = append(q.queue[:i], q.queue[i+1:]...)
+
+                        return task, nil</span>
+                }
+        }
+
+        <span class="cov8" title="1">return nil, nil</span>
+}
+
+// Peek returns tasks without claiming them
+func (q *InMemoryTaskQueue) Peek(ctx context.Context, count int) ([]*models.BackgroundTask, error) <span class="cov8" title="1">{
+        q.mu.RLock()
+        defer q.mu.RUnlock()
+
+        result := make([]*models.BackgroundTask, 0, count)
+        for i, task := range q.queue </span><span class="cov8" title="1">{
+                if i &gt;= count </span><span class="cov0" title="0">{
+                        break</span>
+                }
+                <span class="cov8" title="1">if task.Status == models.TaskStatusPending </span><span class="cov8" title="1">{
+                        result = append(result, task)
+                }</span>
+        }
+
+        <span class="cov8" title="1">return result, nil</span>
+}
+
+// Requeue returns a task to the queue
+func (q *InMemoryTaskQueue) Requeue(ctx context.Context, taskID string, delay time.Duration) error <span class="cov8" title="1">{
+        q.mu.Lock()
+        defer q.mu.Unlock()
+
+        task, exists := q.tasks[taskID]
+        if !exists </span><span class="cov0" title="0">{
+                return fmt.Errorf("task not found: %s", taskID)
+        }</span>
+
+        <span class="cov8" title="1">task.Status = models.TaskStatusPending
+        task.WorkerID = nil
+        task.StartedAt = nil
+        task.RetryCount++
+        task.ScheduledAt = time.Now().Add(delay)
+        task.UpdatedAt = time.Now()
+
+        q.queue = append(q.queue, task)
+        q.sortQueue()
+
+        return nil</span>
+}
+
+// MoveToDeadLetter moves a task to dead letter
+func (q *InMemoryTaskQueue) MoveToDeadLetter(ctx context.Context, taskID string, reason string) error <span class="cov0" title="0">{
+        q.mu.Lock()
+        defer q.mu.Unlock()
+
+        task, exists := q.tasks[taskID]
+        if !exists </span><span class="cov0" title="0">{
+                return fmt.Errorf("task not found: %s", taskID)
+        }</span>
+
+        <span class="cov0" title="0">task.Status = models.TaskStatusDeadLetter
+        task.LastError = &amp;reason
+        task.UpdatedAt = time.Now()
+
+        return nil</span>
+}
+
+// GetPendingCount returns pending task count
+func (q *InMemoryTaskQueue) GetPendingCount(ctx context.Context) (int64, error) <span class="cov0" title="0">{
+        q.mu.RLock()
+        defer q.mu.RUnlock()
+
+        var count int64
+        for _, task := range q.tasks </span><span class="cov0" title="0">{
+                if task.Status == models.TaskStatusPending </span><span class="cov0" title="0">{
+                        count++
+                }</span>
+        }
+        <span class="cov0" title="0">return count, nil</span>
+}
+
+// GetRunningCount returns running task count
+func (q *InMemoryTaskQueue) GetRunningCount(ctx context.Context) (int64, error) <span class="cov0" title="0">{
+        q.mu.RLock()
+        defer q.mu.RUnlock()
+
+        var count int64
+        for _, task := range q.tasks </span><span class="cov0" title="0">{
+                if task.Status == models.TaskStatusRunning </span><span class="cov0" title="0">{
+                        count++
+                }</span>
+        }
+        <span class="cov0" title="0">return count, nil</span>
+}
+
+// GetQueueDepth returns counts by priority
+func (q *InMemoryTaskQueue) GetQueueDepth(ctx context.Context) (map[models.TaskPriority]int64, error) <span class="cov0" title="0">{
+        q.mu.RLock()
+        defer q.mu.RUnlock()
+
+        counts := make(map[models.TaskPriority]int64)
+        for _, task := range q.tasks </span><span class="cov0" title="0">{
+                if task.Status == models.TaskStatusPending </span><span class="cov0" title="0">{
+                        counts[task.Priority]++
+                }</span>
+        }
+        <span class="cov0" title="0">return counts, nil</span>
+}
+
+// sortQueue sorts the queue by priority and creation time
+func (q *InMemoryTaskQueue) sortQueue() <span class="cov8" title="1">{
+        // Sort by priority weight, then by creation time
+        for i := 0; i &lt; len(q.queue)-1; i++ </span><span class="cov0" title="0">{
+                for j := i + 1; j &lt; len(q.queue); j++ </span><span class="cov0" title="0">{
+                        if q.shouldSwap(q.queue[i], q.queue[j]) </span><span class="cov0" title="0">{
+                                q.queue[i], q.queue[j] = q.queue[j], q.queue[i]
+                        }</span>
+                }
+        }
+}
+
+func (q *InMemoryTaskQueue) shouldSwap(a, b *models.BackgroundTask) bool <span class="cov0" title="0">{
+        // Higher priority (lower weight) should come first
+        if a.Priority.Weight() != b.Priority.Weight() </span><span class="cov0" title="0">{
+                return a.Priority.Weight() &gt; b.Priority.Weight()
+        }</span>
+        // Earlier created should come first
+        <span class="cov0" title="0">return a.CreatedAt.After(b.CreatedAt)</span>
+}
+
+// GetTask returns a task by ID (for testing)
+func (q *InMemoryTaskQueue) GetTask(taskID string) *models.BackgroundTask <span class="cov0" title="0">{
+        q.mu.RLock()
+        defer q.mu.RUnlock()
+        return q.tasks[taskID]
+}</span>
+
+// UpdateTask updates a task (for testing)
+func (q *InMemoryTaskQueue) UpdateTask(task *models.BackgroundTask) <span class="cov0" title="0">{
+        q.mu.Lock()
+        defer q.mu.Unlock()
+        task.UpdatedAt = time.Now()
+        q.tasks[task.ID] = task
+}</span>
+
+// MarshalJSON for TaskQueueStats
+func (s *TaskQueueStats) MarshalJSON() ([]byte, error) <span class="cov0" title="0">{
+        type Alias TaskQueueStats
+        return json.Marshal(&amp;struct {
+                *Alias
+        }{
+                Alias: (*Alias)(s),
+        })
+}</span>
+</pre>
+		
+		<pre class="file" id="file8" style="display: none">package background
+
+import (
+        "context"
+        "fmt"
+        "runtime"
+        "sync"
+        "sync/atomic"
+        "time"
+
+        "github.com/google/uuid"
+        "github.com/sirupsen/logrus"
+
+        "digital.vasic.models"
+)
+
+// WorkerPoolConfig holds configuration for the worker pool
+type WorkerPoolConfig struct {
+        MinWorkers            int           `yaml:"min_workers"`
+        MaxWorkers            int           `yaml:"max_workers"`
+        ScaleUpThreshold      float64       `yaml:"scale_up_threshold"`
+        ScaleDownThreshold    float64       `yaml:"scale_down_threshold"`
+        ScaleInterval         time.Duration `yaml:"scale_interval"`
+        WorkerIdleTimeout     time.Duration `yaml:"worker_idle_timeout"`
+        QueuePollInterval     time.Duration `yaml:"queue_poll_interval"`
+        HeartbeatInterval     time.Duration `yaml:"heartbeat_interval"`
+        ResourceCheckInterval time.Duration `yaml:"resource_check_interval"`
+        MaxCPUPercent         float64       `yaml:"max_cpu_percent"`
+        MaxMemoryPercent      float64       `yaml:"max_memory_percent"`
+        GracefulShutdownTime  time.Duration `yaml:"graceful_shutdown_time"`
+}
+
+// DefaultWorkerPoolConfig returns sensible defaults
+func DefaultWorkerPoolConfig() *WorkerPoolConfig <span class="cov0" title="0">{
+        return &amp;WorkerPoolConfig{
+                MinWorkers:            2,
+                MaxWorkers:            runtime.NumCPU() * 2,
+                ScaleUpThreshold:      0.7,
+                ScaleDownThreshold:    0.3,
+                ScaleInterval:         30 * time.Second,
+                WorkerIdleTimeout:     5 * time.Minute,
+                QueuePollInterval:     1 * time.Second,
+                HeartbeatInterval:     10 * time.Second,
+                ResourceCheckInterval: 5 * time.Second,
+                MaxCPUPercent:         80.0,
+                MaxMemoryPercent:      80.0,
+                GracefulShutdownTime:  30 * time.Second,
+        }
+}</span>
+
+// AdaptiveWorkerPool manages background task execution with auto-scaling
+type AdaptiveWorkerPool struct {
+        config          *WorkerPoolConfig
+        queue           TaskQueue
+        repository      TaskRepository
+        executors       map[string]TaskExecutor
+        executorsMu     sync.RWMutex
+        resourceMonitor ResourceMonitor
+        stuckDetector   StuckDetector
+        notifier        NotificationService
+        logger          *logrus.Logger
+        metrics         *WorkerPoolMetrics
+
+        workers     map[string]*Worker
+        workersMu   sync.RWMutex
+        activeCount int32
+
+        ctx    context.Context
+        cancel context.CancelFunc
+        wg     sync.WaitGroup
+
+        scaling int32 // 1 if scaling in progress
+        started bool
+}
+
+// Worker represents a single worker in the pool
+type Worker struct {
+        ID             string
+        status         int32 // Use atomic for thread-safe access (workerState)
+        currentTask    *models.BackgroundTask
+        taskMu         sync.RWMutex // Protects currentTask
+        StartedAt      time.Time
+        lastActivity   time.Time
+        activityMu     sync.RWMutex // Protects lastActivity
+        TasksCompleted int64
+        TasksFailed    int64
+        TotalDuration  time.Duration
+
+        pool         *AdaptiveWorkerPool
+        ctx          context.Context
+        cancel       context.CancelFunc
+        stopChan     chan struct{}
+        stopOnce     sync.Once // CONCURRENCY FIX: Prevent double-close panic
+        stopChanDone int32     // Atomic flag to track if stopChan is closed
+}
+
+type workerState int32
+
+const (
+        workerStateIdle workerState = iota
+        workerStateBusy
+        workerStateStopping
+        workerStateStopped
+)
+
+func (s workerState) String() string <span class="cov0" title="0">{
+        switch s </span>{
+        case workerStateIdle:<span class="cov0" title="0">
+                return "idle"</span>
+        case workerStateBusy:<span class="cov0" title="0">
+                return "busy"</span>
+        case workerStateStopping:<span class="cov0" title="0">
+                return "stopping"</span>
+        case workerStateStopped:<span class="cov0" title="0">
+                return "stopped"</span>
+        default:<span class="cov0" title="0">
+                return "unknown"</span>
+        }
+}
+
+// CONCURRENCY FIX: Thread-safe worker state accessors
+
+// Status returns the worker's current state (thread-safe)
+func (w *Worker) Status() workerState <span class="cov0" title="0">{
+        return workerState(atomic.LoadInt32(&amp;w.status))
+}</span>
+
+// setStatus sets the worker's state (thread-safe)
+func (w *Worker) setStatus(s workerState) <span class="cov8" title="1">{
+        atomic.StoreInt32(&amp;w.status, int32(s))
+}</span>
+
+// CurrentTask returns the worker's current task (thread-safe)
+func (w *Worker) CurrentTask() *models.BackgroundTask <span class="cov0" title="0">{
+        w.taskMu.RLock()
+        defer w.taskMu.RUnlock()
+        return w.currentTask
+}</span>
+
+// setCurrentTask sets the worker's current task (thread-safe)
+func (w *Worker) setCurrentTask(task *models.BackgroundTask) <span class="cov0" title="0">{
+        w.taskMu.Lock()
+        defer w.taskMu.Unlock()
+        w.currentTask = task
+}</span>
+
+// LastActivity returns the worker's last activity time (thread-safe)
+func (w *Worker) LastActivity() time.Time <span class="cov0" title="0">{
+        w.activityMu.RLock()
+        defer w.activityMu.RUnlock()
+        return w.lastActivity
+}</span>
+
+// setLastActivity sets the worker's last activity time (thread-safe)
+func (w *Worker) setLastActivity(t time.Time) <span class="cov0" title="0">{
+        w.activityMu.Lock()
+        defer w.activityMu.Unlock()
+        w.lastActivity = t
+}</span>
+
+// signalStop safely signals the worker to stop (prevents double-close panic)
+func (w *Worker) signalStop() bool <span class="cov8" title="1">{
+        sent := false
+        w.stopOnce.Do(func() </span><span class="cov8" title="1">{
+                close(w.stopChan)
+                atomic.StoreInt32(&amp;w.stopChanDone, 1)
+                sent = true
+        }</span>)
+        <span class="cov8" title="1">return sent</span>
+}
+
+// NewAdaptiveWorkerPool creates a new worker pool
+func NewAdaptiveWorkerPool(
+        config *WorkerPoolConfig,
+        queue TaskQueue,
+        repository TaskRepository,
+        resourceMonitor ResourceMonitor,
+        stuckDetector StuckDetector,
+        notifier NotificationService,
+        logger *logrus.Logger,
+) *AdaptiveWorkerPool <span class="cov8" title="1">{
+        if config == nil </span><span class="cov0" title="0">{
+                config = DefaultWorkerPoolConfig()
+        }</span>
+
+        <span class="cov8" title="1">ctx, cancel := context.WithCancel(context.Background())
+
+        return &amp;AdaptiveWorkerPool{
+                config:          config,
+                queue:           queue,
+                repository:      repository,
+                executors:       make(map[string]TaskExecutor),
+                resourceMonitor: resourceMonitor,
+                stuckDetector:   stuckDetector,
+                notifier:        notifier,
+                logger:          logger,
+                metrics:         NewWorkerPoolMetrics(),
+                workers:         make(map[string]*Worker),
+                ctx:             ctx,
+                cancel:          cancel,
+        }</span>
+}
+
+// RegisterExecutor registers a task executor for a task type
+func (wp *AdaptiveWorkerPool) RegisterExecutor(taskType string, executor TaskExecutor) <span class="cov8" title="1">{
+        wp.executorsMu.Lock()
+        defer wp.executorsMu.Unlock()
+        wp.executors[taskType] = executor
+        wp.logger.WithField("task_type", taskType).Debug("Registered task executor")
+}</span>
+
+// Start initializes and starts the worker pool
+func (wp *AdaptiveWorkerPool) Start(ctx context.Context) error <span class="cov8" title="1">{
+        if wp.started </span><span class="cov0" title="0">{
+                return fmt.Errorf("worker pool already started")
+        }</span>
+
+        <span class="cov8" title="1">wp.logger.WithFields(logrus.Fields{
+                "min_workers": wp.config.MinWorkers,
+                "max_workers": wp.config.MaxWorkers,
+        }).Info("Starting worker pool")
+
+        // Start minimum workers
+        for i := 0; i &lt; wp.config.MinWorkers; i++ </span><span class="cov8" title="1">{
+                wp.spawnWorker()
+        }</span>
+
+        // Start scaling monitor
+        <span class="cov8" title="1">wp.wg.Add(1)
+        go wp.scalingLoop()
+
+        // Start stuck detection loop
+        wp.wg.Add(1)
+        go wp.stuckDetectionLoop()
+
+        // Start heartbeat monitor
+        wp.wg.Add(1)
+        go wp.heartbeatMonitorLoop()
+
+        wp.started = true
+        return nil</span>
+}
+
+// Stop gracefully stops the worker pool
+func (wp *AdaptiveWorkerPool) Stop(gracePeriod time.Duration) error <span class="cov8" title="1">{
+        wp.logger.Info("Stopping worker pool")
+        wp.cancel()
+
+        // Signal all workers to stop (using safe signalStop to prevent double-close panic)
+        wp.workersMu.Lock()
+        for _, worker := range wp.workers </span><span class="cov8" title="1">{
+                worker.signalStop()
+        }</span>
+        <span class="cov8" title="1">wp.workersMu.Unlock()
+
+        // Wait with timeout
+        done := make(chan struct{})
+        go func() </span><span class="cov8" title="1">{
+                wp.wg.Wait()
+                close(done)
+        }</span>()
+
+        <span class="cov8" title="1">select </span>{
+        case &lt;-done:<span class="cov8" title="1">
+                wp.logger.Info("Worker pool stopped gracefully")</span>
+        case &lt;-time.After(gracePeriod):<span class="cov0" title="0">
+                wp.logger.Warn("Worker pool stop timed out")</span>
+        }
+
+        <span class="cov8" title="1">wp.started = false
+        return nil</span>
+}
+
+// GetWorkerCount returns the current number of workers
+func (wp *AdaptiveWorkerPool) GetWorkerCount() int <span class="cov8" title="1">{
+        return int(atomic.LoadInt32(&amp;wp.activeCount))
+}</span>
+
+// GetActiveTaskCount returns the number of currently executing tasks
+func (wp *AdaptiveWorkerPool) GetActiveTaskCount() int <span class="cov0" title="0">{
+        wp.workersMu.RLock()
+        defer wp.workersMu.RUnlock()
+
+        count := 0
+        for _, worker := range wp.workers </span><span class="cov0" title="0">{
+                // CONCURRENCY FIX: Use thread-safe accessor
+                if worker.Status() == workerStateBusy </span><span class="cov0" title="0">{
+                        count++
+                }</span>
+        }
+        <span class="cov0" title="0">return count</span>
+}
+
+// GetWorkerStatus returns status information for all workers
+func (wp *AdaptiveWorkerPool) GetWorkerStatus() []WorkerStatus <span class="cov0" title="0">{
+        wp.workersMu.RLock()
+        defer wp.workersMu.RUnlock()
+
+        statuses := make([]WorkerStatus, 0, len(wp.workers))
+        for _, worker := range wp.workers </span><span class="cov0" title="0">{
+                var avgDuration time.Duration
+                completed := atomic.LoadInt64(&amp;worker.TasksCompleted)
+                if completed &gt; 0 </span><span class="cov0" title="0">{
+                        avgDuration = worker.TotalDuration / time.Duration(completed)
+                }</span>
+
+                // CONCURRENCY FIX: Use thread-safe accessors
+                <span class="cov0" title="0">statuses = append(statuses, WorkerStatus{
+                        ID:              worker.ID,
+                        Status:          worker.Status().String(),
+                        CurrentTask:     worker.CurrentTask(),
+                        StartedAt:       worker.StartedAt,
+                        LastActivity:    worker.LastActivity(),
+                        TasksCompleted:  completed,
+                        TasksFailed:     atomic.LoadInt64(&amp;worker.TasksFailed),
+                        AvgTaskDuration: avgDuration,
+                })</span>
+        }
+        <span class="cov0" title="0">return statuses</span>
+}
+
+// Scale manually adjusts the worker count
+func (wp *AdaptiveWorkerPool) Scale(targetCount int) error <span class="cov0" title="0">{
+        if targetCount &lt; wp.config.MinWorkers </span><span class="cov0" title="0">{
+                targetCount = wp.config.MinWorkers
+        }</span>
+        <span class="cov0" title="0">if targetCount &gt; wp.config.MaxWorkers </span><span class="cov0" title="0">{
+                targetCount = wp.config.MaxWorkers
+        }</span>
+
+        <span class="cov0" title="0">current := wp.GetWorkerCount()
+        diff := targetCount - current
+
+        if diff &gt; 0 </span><span class="cov0" title="0">{
+                for i := 0; i &lt; diff; i++ </span><span class="cov0" title="0">{
+                        wp.spawnWorker()
+                }</span>
+        } else<span class="cov0" title="0"> if diff &lt; 0 </span><span class="cov0" title="0">{
+                // Workers will stop themselves via idle timeout
+                // or we can explicitly stop some
+                // CONCURRENCY FIX: Use thread-safe accessors and signalStop
+                wp.workersMu.Lock()
+                stopped := 0
+                for _, worker := range wp.workers </span><span class="cov0" title="0">{
+                        if worker.Status() == workerStateIdle &amp;&amp; stopped &lt; -diff </span><span class="cov0" title="0">{
+                                if worker.signalStop() </span><span class="cov0" title="0">{
+                                        stopped++
+                                }</span>
+                        }
+                }
+                <span class="cov0" title="0">wp.workersMu.Unlock()</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// spawnWorker creates and starts a new worker
+func (wp *AdaptiveWorkerPool) spawnWorker() <span class="cov8" title="1">{
+        workerID := uuid.New().String()[:8]
+        workerCtx, workerCancel := context.WithCancel(wp.ctx)
+
+        worker := &amp;Worker{
+                ID:           workerID,
+                status:       int32(workerStateIdle),
+                StartedAt:    time.Now(),
+                lastActivity: time.Now(),
+                pool:         wp,
+                ctx:          workerCtx,
+                cancel:       workerCancel,
+                stopChan:     make(chan struct{}),
+                // stopOnce and stopChanDone are zero-initialized
+        }
+
+        wp.workersMu.Lock()
+        wp.workers[workerID] = worker
+        wp.workersMu.Unlock()
+
+        atomic.AddInt32(&amp;wp.activeCount, 1)
+        if wp.metrics != nil </span><span class="cov8" title="1">{
+                wp.metrics.WorkersActive.Inc()
+        }</span>
+
+        <span class="cov8" title="1">wp.wg.Add(1)
+        go wp.workerLoop(worker)
+
+        wp.logger.WithField("worker_id", workerID).Debug("Worker spawned")</span>
+}
+
+// workerLoop is the main loop for a worker
+func (wp *AdaptiveWorkerPool) workerLoop(worker *Worker) <span class="cov8" title="1">{
+        defer wp.wg.Done()
+        defer worker.cancel()
+        defer func() </span><span class="cov8" title="1">{
+                atomic.AddInt32(&amp;wp.activeCount, -1)
+                if wp.metrics != nil </span><span class="cov8" title="1">{
+                        wp.metrics.WorkersActive.Dec()
+                }</span>
+                <span class="cov8" title="1">wp.workersMu.Lock()
+                delete(wp.workers, worker.ID)
+                wp.workersMu.Unlock()
+                // CONCURRENCY FIX: Use thread-safe setter
+                worker.setStatus(workerStateStopped)</span>
+        }()
+
+        <span class="cov8" title="1">idleTimer := time.NewTimer(wp.config.WorkerIdleTimeout)
+        defer idleTimer.Stop()
+
+        // Helper function for interruptible sleep
+        sleepOrCancel := func(ctx context.Context, d time.Duration) bool </span><span class="cov8" title="1">{
+                timer := time.NewTimer(d)
+                defer timer.Stop()
+                select </span>{
+                case &lt;-timer.C:<span class="cov8" title="1">
+                        return true</span>
+                case &lt;-ctx.Done():<span class="cov0" title="0">
+                        return false</span>
+                case &lt;-worker.stopChan:<span class="cov0" title="0">
+                        return false</span>
+                }
+        }
+
+        <span class="cov8" title="1">for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-worker.ctx.Done():<span class="cov0" title="0">
+                        return</span>
+                case &lt;-worker.stopChan:<span class="cov8" title="1">
+                        return</span>
+                case &lt;-idleTimer.C:<span class="cov0" title="0">
+                        // Check context before processing to ensure prompt shutdown
+                        if worker.ctx.Err() != nil || atomic.LoadInt32(&amp;worker.stopChanDone) == 1 </span><span class="cov0" title="0">{
+                                return
+                        }</span>
+                        // Check if we can scale down
+                        <span class="cov0" title="0">if wp.canScaleDown() </span><span class="cov0" title="0">{
+                                wp.logger.WithField("worker_id", worker.ID).Debug("Worker stopping due to idle timeout")
+                                return
+                        }</span>
+                        <span class="cov0" title="0">idleTimer.Reset(wp.config.WorkerIdleTimeout)</span>
+                default:<span class="cov8" title="1">
+                        // Try to get a task
+                        requirements := wp.calculateWorkerRequirements()
+
+                        task, err := wp.queue.Dequeue(worker.ctx, worker.ID, requirements)
+                        if err != nil </span><span class="cov0" title="0">{
+                                wp.logger.WithError(err).Debug("Failed to dequeue task")
+                                if !sleepOrCancel(worker.ctx, wp.config.QueuePollInterval) </span><span class="cov0" title="0">{
+                                        return
+                                }</span>
+                                <span class="cov0" title="0">continue</span>
+                        }
+
+                        <span class="cov8" title="1">if task == nil </span><span class="cov8" title="1">{
+                                if !sleepOrCancel(worker.ctx, wp.config.QueuePollInterval) </span><span class="cov0" title="0">{
+                                        return
+                                }</span>
+                                <span class="cov8" title="1">continue</span>
+                        }
+
+                        // Reset idle timer
+                        <span class="cov0" title="0">idleTimer.Reset(wp.config.WorkerIdleTimeout)
+
+                        // Execute task
+                        // CONCURRENCY FIX: Use thread-safe setters
+                        worker.setStatus(workerStateBusy)
+                        worker.setCurrentTask(task)
+                        worker.setLastActivity(time.Now())
+
+                        wp.executeTask(worker, task)
+
+                        worker.setStatus(workerStateIdle)
+                        worker.setCurrentTask(nil)
+                        worker.setLastActivity(time.Now())</span>
+                }
+        }
+}
+
+// executeTask handles the execution of a single task
+func (wp *AdaptiveWorkerPool) executeTask(worker *Worker, task *models.BackgroundTask) <span class="cov0" title="0">{
+        startTime := time.Now()
+
+        wp.logger.WithFields(logrus.Fields{
+                "task_id":   task.ID,
+                "task_type": task.TaskType,
+                "worker_id": worker.ID,
+        }).Debug("Starting task execution")
+
+        // Get executor
+        wp.executorsMu.RLock()
+        executor, exists := wp.executors[task.TaskType]
+        wp.executorsMu.RUnlock()
+
+        if !exists </span><span class="cov0" title="0">{
+                wp.handleTaskError(task, worker, fmt.Errorf("no executor registered for task type: %s", task.TaskType))
+                return
+        }</span>
+
+        // Start resource monitoring if process PID is set
+        <span class="cov0" title="0">if task.ProcessPID != nil &amp;&amp; wp.resourceMonitor != nil </span><span class="cov0" title="0">{
+                if err := wp.resourceMonitor.StartMonitoring(task.ID, *task.ProcessPID, wp.config.ResourceCheckInterval); err != nil </span><span class="cov0" title="0">{
+                        wp.logger.WithError(err).Debug("Failed to start resource monitoring")
+                }</span>
+                <span class="cov0" title="0">defer func() </span><span class="cov0" title="0">{
+                        if err := wp.resourceMonitor.StopMonitoring(task.ID); err != nil </span><span class="cov0" title="0">{
+                                wp.logger.WithError(err).Debug("Failed to stop resource monitoring")
+                        }</span>
+                }()
+        }
+
+        // Create progress reporter
+        <span class="cov0" title="0">reporter := &amp;taskProgressReporter{
+                taskID:     task.ID,
+                repository: wp.repository,
+                notifier:   wp.notifier,
+                task:       task,
+                workerID:   worker.ID,
+        }
+
+        // Create task context with timeout
+        var taskCtx context.Context
+        var taskCancel context.CancelFunc
+
+        if task.Config.Endless </span><span class="cov0" title="0">{
+                taskCtx, taskCancel = context.WithCancel(worker.ctx)
+        }</span> else<span class="cov0" title="0"> {
+                timeout := time.Duration(task.Config.TimeoutSeconds) * time.Second
+                if timeout == 0 </span><span class="cov0" title="0">{
+                        timeout = 30 * time.Minute // Default timeout
+                }</span>
+                <span class="cov0" title="0">taskCtx, taskCancel = context.WithTimeout(worker.ctx, timeout)</span>
+        }
+        <span class="cov0" title="0">defer taskCancel()
+
+        // Notify task started
+        if wp.notifier != nil </span><span class="cov0" title="0">{
+                if err := wp.notifier.NotifyTaskEvent(taskCtx, task, models.TaskEventStarted, map[string]interface{}{
+                        "worker_id": worker.ID,
+                }); err != nil </span><span class="cov0" title="0">{
+                        wp.logger.WithError(err).Debug("Failed to notify task started event")
+                }</span>
+        }
+
+        // Execute
+        <span class="cov0" title="0">err := executor.Execute(taskCtx, task, reporter)
+
+        duration := time.Since(startTime)
+        durationSec := int(duration.Seconds())
+        task.ActualDurationSeconds = &amp;durationSec
+        worker.TotalDuration += duration
+
+        if err != nil </span><span class="cov0" title="0">{
+                wp.handleTaskError(task, worker, err)
+        }</span> else<span class="cov0" title="0"> {
+                wp.handleTaskSuccess(task, worker, duration)
+        }</span>
+
+        <span class="cov0" title="0">if wp.metrics != nil </span><span class="cov0" title="0">{
+                wp.metrics.TaskDuration.WithLabelValues(task.TaskType).Observe(duration.Seconds())
+        }</span>
+}
+
+// handleTaskSuccess handles successful task completion
+func (wp *AdaptiveWorkerPool) handleTaskSuccess(task *models.BackgroundTask, worker *Worker, duration time.Duration) <span class="cov0" title="0">{
+        task.Status = models.TaskStatusCompleted
+        now := time.Now()
+        task.CompletedAt = &amp;now
+        task.Progress = 100
+
+        if err := wp.repository.Update(context.Background(), task); err != nil </span><span class="cov0" title="0">{
+                wp.logger.WithError(err).Error("Failed to update completed task")
+        }</span>
+
+        <span class="cov0" title="0">if err := wp.repository.LogEvent(context.Background(), task.ID, models.TaskEventCompleted, map[string]interface{}{
+                "duration_ms": duration.Milliseconds(),
+                "worker_id":   worker.ID,
+        }, &amp;worker.ID); err != nil </span><span class="cov0" title="0">{
+                wp.logger.WithError(err).Debug("Failed to log task completed event")
+        }</span>
+
+        <span class="cov0" title="0">if wp.notifier != nil </span><span class="cov0" title="0">{
+                if err := wp.notifier.NotifyTaskEvent(context.Background(), task, models.TaskEventCompleted, map[string]interface{}{
+                        "duration_ms": duration.Milliseconds(),
+                }); err != nil </span><span class="cov0" title="0">{
+                        wp.logger.WithError(err).Debug("Failed to notify task completed event")
+                }</span>
+        }
+
+        <span class="cov0" title="0">atomic.AddInt64(&amp;worker.TasksCompleted, 1)
+        if wp.metrics != nil </span><span class="cov0" title="0">{
+                wp.metrics.TasksTotal.WithLabelValues(task.TaskType, "completed").Inc()
+        }</span>
+
+        <span class="cov0" title="0">wp.logger.WithFields(logrus.Fields{
+                "task_id":   task.ID,
+                "task_type": task.TaskType,
+                "duration":  duration,
+        }).Debug("Task completed successfully")</span>
+}
+
+// handleTaskError handles task failure
+func (wp *AdaptiveWorkerPool) handleTaskError(task *models.BackgroundTask, worker *Worker, err error) <span class="cov0" title="0">{
+        errorMsg := err.Error()
+        task.LastError = &amp;errorMsg
+
+        wp.logger.WithError(err).WithFields(logrus.Fields{
+                "task_id":     task.ID,
+                "task_type":   task.TaskType,
+                "retry_count": task.RetryCount,
+                "max_retries": task.MaxRetries,
+        }).Warn("Task execution failed")
+
+        // Check if we should retry
+        if task.CanRetry() </span><span class="cov0" title="0">{
+                delay := time.Duration(task.RetryDelaySeconds) * time.Second
+                if err := wp.queue.Requeue(context.Background(), task.ID, delay); err != nil </span><span class="cov0" title="0">{
+                        wp.logger.WithError(err).Error("Failed to requeue task")
+                }</span>
+                <span class="cov0" title="0">if wp.metrics != nil </span><span class="cov0" title="0">{
+                        wp.metrics.TaskRetries.WithLabelValues(task.TaskType).Inc()
+                }</span>
+        } else<span class="cov0" title="0"> {
+                // Move to dead letter queue
+                task.Status = models.TaskStatusFailed
+                if err := wp.repository.Update(context.Background(), task); err != nil </span><span class="cov0" title="0">{
+                        wp.logger.WithError(err).Error("Failed to update failed task")
+                }</span>
+
+                <span class="cov0" title="0">if err := wp.queue.MoveToDeadLetter(context.Background(), task.ID, errorMsg); err != nil </span><span class="cov0" title="0">{
+                        wp.logger.WithError(err).Error("Failed to move task to dead letter")
+                }</span>
+
+                <span class="cov0" title="0">if wp.notifier != nil </span><span class="cov0" title="0">{
+                        if err := wp.notifier.NotifyTaskEvent(context.Background(), task, models.TaskEventFailed, map[string]interface{}{
+                                "error":       errorMsg,
+                                "retry_count": task.RetryCount,
+                        }); err != nil </span><span class="cov0" title="0">{
+                                wp.logger.WithError(err).Debug("Failed to notify task failed event")
+                        }</span>
+                }
+
+                <span class="cov0" title="0">if wp.metrics != nil </span><span class="cov0" title="0">{
+                        wp.metrics.TasksTotal.WithLabelValues(task.TaskType, "failed").Inc()
+                        wp.metrics.DeadLetterTasks.Inc()
+                }</span>
+        }
+
+        <span class="cov0" title="0">if err := wp.repository.LogEvent(context.Background(), task.ID, models.TaskEventFailed, map[string]interface{}{
+                "error":       errorMsg,
+                "retry_count": task.RetryCount,
+                "worker_id":   worker.ID,
+        }, &amp;worker.ID); err != nil </span><span class="cov0" title="0">{
+                wp.logger.WithError(err).Debug("Failed to log task failed event")
+        }</span>
+
+        <span class="cov0" title="0">atomic.AddInt64(&amp;worker.TasksFailed, 1)</span>
+}
+
+// scalingLoop monitors load and scales workers
+func (wp *AdaptiveWorkerPool) scalingLoop() <span class="cov8" title="1">{
+        defer wp.wg.Done()
+
+        ticker := time.NewTicker(wp.config.ScaleInterval)
+        defer ticker.Stop()
+
+        for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-wp.ctx.Done():<span class="cov8" title="1">
+                        return</span>
+                case &lt;-ticker.C:<span class="cov0" title="0">
+                        // Check context before processing to ensure prompt shutdown
+                        if wp.ctx.Err() != nil </span><span class="cov0" title="0">{
+                                return
+                        }</span>
+                        <span class="cov0" title="0">wp.checkAndScale()</span>
+                }
+        }
+}
+
+// checkAndScale evaluates if scaling is needed
+func (wp *AdaptiveWorkerPool) checkAndScale() <span class="cov0" title="0">{
+        // Prevent concurrent scaling
+        if !atomic.CompareAndSwapInt32(&amp;wp.scaling, 0, 1) </span><span class="cov0" title="0">{
+                return
+        }</span>
+        <span class="cov0" title="0">defer atomic.StoreInt32(&amp;wp.scaling, 0)
+
+        if wp.resourceMonitor == nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+
+        <span class="cov0" title="0">resources, err := wp.resourceMonitor.GetSystemResources()
+        if err != nil </span><span class="cov0" title="0">{
+                wp.logger.WithError(err).Warn("Failed to get system resources")
+                return
+        }</span>
+
+        <span class="cov0" title="0">currentWorkers := wp.GetWorkerCount()
+        pendingCount, _ := wp.queue.GetPendingCount(wp.ctx) //nolint:errcheck
+
+        // Calculate load factor
+        cpuLoad := resources.CPULoadPercent / 100.0
+        memLoad := resources.MemoryUsedPercent / 100.0
+        avgLoad := (cpuLoad + memLoad) / 2.0
+
+        queuePressure := float64(pendingCount) / float64(currentWorkers+1)
+
+        // Scale up conditions
+        if avgLoad &lt; wp.config.ScaleUpThreshold &amp;&amp;
+                queuePressure &gt; 2.0 &amp;&amp;
+                currentWorkers &lt; wp.config.MaxWorkers &amp;&amp;
+                resources.CPULoadPercent &lt; wp.config.MaxCPUPercent &amp;&amp;
+                resources.MemoryUsedPercent &lt; wp.config.MaxMemoryPercent </span><span class="cov0" title="0">{
+
+                // Scale up
+                workersToAdd := min(
+                        wp.config.MaxWorkers-currentWorkers,
+                        int(queuePressure),
+                        3, // Max workers to add at once
+                )
+
+                for i := 0; i &lt; workersToAdd; i++ </span><span class="cov0" title="0">{
+                        wp.spawnWorker()
+                }</span>
+
+                <span class="cov0" title="0">wp.logger.WithFields(logrus.Fields{
+                        "added":   workersToAdd,
+                        "current": currentWorkers + workersToAdd,
+                        "load":    avgLoad,
+                        "pending": pendingCount,
+                }).Info("Scaled up workers")
+
+                if wp.metrics != nil </span><span class="cov0" title="0">{
+                        wp.metrics.ScalingEvents.WithLabelValues("up").Inc()
+                }</span>
+        }
+
+        // Scale down is handled by idle timeout in worker loop
+        <span class="cov0" title="0">if avgLoad &lt; wp.config.ScaleDownThreshold &amp;&amp; queuePressure &lt; 0.5 &amp;&amp; currentWorkers &gt; wp.config.MinWorkers </span><span class="cov0" title="0">{
+                if wp.metrics != nil </span><span class="cov0" title="0">{
+                        wp.metrics.ScalingEvents.WithLabelValues("down").Inc()
+                }</span>
+        }
+}
+
+// canScaleDown returns true if we can reduce workers
+func (wp *AdaptiveWorkerPool) canScaleDown() bool <span class="cov0" title="0">{
+        return wp.GetWorkerCount() &gt; wp.config.MinWorkers
+}</span>
+
+// stuckDetectionLoop periodically checks for stuck tasks
+func (wp *AdaptiveWorkerPool) stuckDetectionLoop() <span class="cov8" title="1">{
+        defer wp.wg.Done()
+
+        ticker := time.NewTicker(30 * time.Second)
+        defer ticker.Stop()
+
+        for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-wp.ctx.Done():<span class="cov8" title="1">
+                        return</span>
+                case &lt;-ticker.C:<span class="cov0" title="0">
+                        // Check context before processing to ensure prompt shutdown
+                        if wp.ctx.Err() != nil </span><span class="cov0" title="0">{
+                                return
+                        }</span>
+                        <span class="cov0" title="0">wp.checkForStuckTasks()</span>
+                }
+        }
+}
+
+// checkForStuckTasks identifies and handles stuck tasks
+func (wp *AdaptiveWorkerPool) checkForStuckTasks() <span class="cov0" title="0">{
+        if wp.stuckDetector == nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+
+        <span class="cov0" title="0">threshold := 5 * time.Minute // Default threshold
+        staleTasks, err := wp.repository.GetStaleTasks(wp.ctx, threshold)
+        if err != nil </span><span class="cov0" title="0">{
+                wp.logger.WithError(err).Warn("Failed to get stale tasks")
+                return
+        }</span>
+
+        <span class="cov0" title="0">for _, task := range staleTasks </span><span class="cov0" title="0">{
+                // Get resource snapshots
+                var snapshots []*models.ResourceSnapshot
+                if wp.repository != nil </span><span class="cov0" title="0">{
+                        snapshots, _ = wp.repository.GetResourceSnapshots(wp.ctx, task.ID, 10) //nolint:errcheck
+                }</span>
+
+                <span class="cov0" title="0">isStuck, reason := wp.stuckDetector.IsStuck(wp.ctx, task, snapshots)
+                if isStuck </span><span class="cov0" title="0">{
+                        wp.handleStuckTask(task, reason)
+                }</span>
+        }
+}
+
+// handleStuckTask handles a task that has been detected as stuck
+func (wp *AdaptiveWorkerPool) handleStuckTask(task *models.BackgroundTask, reason string) <span class="cov0" title="0">{
+        wp.logger.WithFields(logrus.Fields{
+                "task_id": task.ID,
+                "reason":  reason,
+        }).Warn("Task detected as stuck")
+
+        task.Status = models.TaskStatusStuck
+        task.LastError = &amp;reason
+
+        if err := wp.repository.Update(wp.ctx, task); err != nil </span><span class="cov0" title="0">{
+                wp.logger.WithError(err).Error("Failed to update stuck task")
+        }</span>
+
+        <span class="cov0" title="0">if err := wp.repository.LogEvent(wp.ctx, task.ID, models.TaskEventStuck, map[string]interface{}{
+                "reason": reason,
+        }, task.WorkerID); err != nil </span><span class="cov0" title="0">{
+                wp.logger.WithError(err).Debug("Failed to log task stuck event")
+        }</span>
+
+        <span class="cov0" title="0">if wp.notifier != nil </span><span class="cov0" title="0">{
+                if err := wp.notifier.NotifyTaskEvent(wp.ctx, task, models.TaskEventStuck, map[string]interface{}{
+                        "reason": reason,
+                }); err != nil </span><span class="cov0" title="0">{
+                        wp.logger.WithError(err).Debug("Failed to notify task stuck event")
+                }</span>
+        }
+
+        <span class="cov0" title="0">if wp.metrics != nil </span><span class="cov0" title="0">{
+                wp.metrics.StuckTasks.Inc()
+        }</span>
+}
+
+// heartbeatMonitorLoop monitors worker heartbeats
+func (wp *AdaptiveWorkerPool) heartbeatMonitorLoop() <span class="cov8" title="1">{
+        defer wp.wg.Done()
+
+        ticker := time.NewTicker(wp.config.HeartbeatInterval)
+        defer ticker.Stop()
+
+        for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-wp.ctx.Done():<span class="cov8" title="1">
+                        return</span>
+                case &lt;-ticker.C:<span class="cov0" title="0">
+                        // Check context before processing to ensure prompt shutdown
+                        if wp.ctx.Err() != nil </span><span class="cov0" title="0">{
+                                return
+                        }</span>
+                        <span class="cov0" title="0">wp.updateHeartbeats()</span>
+                }
+        }
+}
+
+// updateHeartbeats updates heartbeats for running tasks
+func (wp *AdaptiveWorkerPool) updateHeartbeats() <span class="cov0" title="0">{
+        wp.workersMu.RLock()
+        defer wp.workersMu.RUnlock()
+
+        for _, worker := range wp.workers </span><span class="cov0" title="0">{
+                // CONCURRENCY FIX: Use thread-safe accessors
+                currentTask := worker.CurrentTask()
+                if currentTask != nil &amp;&amp; worker.Status() == workerStateBusy </span><span class="cov0" title="0">{
+                        if err := wp.repository.UpdateHeartbeat(wp.ctx, currentTask.ID); err != nil </span><span class="cov0" title="0">{
+                                wp.logger.WithError(err).WithField("task_id", currentTask.ID).Debug("Failed to update heartbeat")
+                        }</span>
+                }
+        }
+}
+
+// calculateWorkerRequirements calculates resource requirements for dequeuing
+func (wp *AdaptiveWorkerPool) calculateWorkerRequirements() ResourceRequirements <span class="cov8" title="1">{
+        if wp.resourceMonitor == nil </span><span class="cov8" title="1">{
+                return ResourceRequirements{}
+        }</span>
+
+        <span class="cov0" title="0">resources, err := wp.resourceMonitor.GetSystemResources()
+        if err != nil </span><span class="cov0" title="0">{
+                return ResourceRequirements{}
+        }</span>
+
+        // Calculate available resources per worker
+        <span class="cov0" title="0">workerCount := wp.GetWorkerCount()
+        if workerCount == 0 </span><span class="cov0" title="0">{
+                workerCount = 1
+        }</span>
+
+        <span class="cov0" title="0">return ResourceRequirements{
+                CPUCores: int(resources.AvailableCPUCores) / workerCount,
+                MemoryMB: int(resources.AvailableMemoryMB) / workerCount,
+        }</span>
+}
+
+// taskProgressReporter implements ProgressReporter
+type taskProgressReporter struct {
+        taskID     string
+        repository TaskRepository
+        notifier   NotificationService
+        task       *models.BackgroundTask
+        workerID   string
+}
+
+func (r *taskProgressReporter) ReportProgress(percent float64, message string) error <span class="cov0" title="0">{
+        if err := r.repository.UpdateProgress(context.Background(), r.taskID, percent, message); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">if r.notifier != nil </span><span class="cov0" title="0">{
+                _ = r.notifier.NotifyTaskEvent(context.Background(), r.task, models.TaskEventProgress, map[string]interface{}{ //nolint:errcheck
+                        "progress": percent,
+                        "message":  message,
+                })
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+func (r *taskProgressReporter) ReportHeartbeat() error <span class="cov0" title="0">{
+        return r.repository.UpdateHeartbeat(context.Background(), r.taskID)
+}</span>
+
+func (r *taskProgressReporter) ReportCheckpoint(data []byte) error <span class="cov0" title="0">{
+        return r.repository.SaveCheckpoint(context.Background(), r.taskID, data)
+}</span>
+
+func (r *taskProgressReporter) ReportMetrics(metrics map[string]interface{}) error <span class="cov0" title="0">{
+        if r.notifier != nil </span><span class="cov0" title="0">{
+                return r.notifier.NotifyTaskEvent(context.Background(), r.task, models.TaskEventResource, metrics)
+        }</span>
+        <span class="cov0" title="0">return nil</span>
+}
+
+func (r *taskProgressReporter) ReportLog(level, message string, fields map[string]interface{}) error <span class="cov0" title="0">{
+        data := map[string]interface{}{
+                "level":   level,
+                "message": message,
+        }
+        for k, v := range fields </span><span class="cov0" title="0">{
+                data[k] = v
+        }</span>
+
+        <span class="cov0" title="0">_ = r.repository.LogEvent(context.Background(), r.taskID, models.TaskEventLog, data, &amp;r.workerID) //nolint:errcheck
+
+        if r.notifier != nil </span><span class="cov0" title="0">{
+                _ = r.notifier.NotifyTaskEvent(context.Background(), r.task, models.TaskEventLog, data) //nolint:errcheck
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+func min(a, b, c int) int <span class="cov0" title="0">{
+        if a &lt; b </span><span class="cov0" title="0">{
+                if a &lt; c </span><span class="cov0" title="0">{
+                        return a
+                }</span>
+                <span class="cov0" title="0">return c</span>
+        }
+        <span class="cov0" title="0">if b &lt; c </span><span class="cov0" title="0">{
+                return b
+        }</span>
+        <span class="cov0" title="0">return c</span>
+}
+
+// Verify AdaptiveWorkerPool implements TaskWaiter
+var _ TaskWaiter = (*AdaptiveWorkerPool)(nil)
+
+// WaitForCompletion blocks until the task completes, fails, or times out
+// progressCallback is called with progress updates during execution
+func (wp *AdaptiveWorkerPool) WaitForCompletion(ctx context.Context, taskID string, timeout time.Duration, progressCallback func(progress float64, message string)) (*models.BackgroundTask, error) <span class="cov0" title="0">{
+        startTime := time.Now()
+
+        // Create a context with timeout
+        waitCtx, cancel := context.WithTimeout(ctx, timeout)
+        defer cancel()
+
+        // Polling interval - start fast, then slow down
+        pollInterval := 100 * time.Millisecond
+        maxPollInterval := 2 * time.Second
+        lastProgress := float64(-1)
+
+        wp.logger.WithFields(logrus.Fields{
+                "task_id": taskID,
+                "timeout": timeout,
+        }).Info("Waiting for task completion")
+
+        for </span><span class="cov0" title="0">{
+                select </span>{
+                case &lt;-waitCtx.Done():<span class="cov0" title="0">
+                        if waitCtx.Err() == context.DeadlineExceeded </span><span class="cov0" title="0">{
+                                return nil, fmt.Errorf("timeout waiting for task %s after %v", taskID, timeout)
+                        }</span>
+                        <span class="cov0" title="0">return nil, waitCtx.Err()</span>
+                case &lt;-time.After(pollInterval):<span class="cov0" title="0">
+                        // Get current task state
+                        task, err := wp.repository.GetByID(ctx, taskID)
+                        if err != nil </span><span class="cov0" title="0">{
+                                return nil, fmt.Errorf("failed to get task %s: %w", taskID, err)
+                        }</span>
+
+                        // Report progress if changed
+                        <span class="cov0" title="0">if progressCallback != nil &amp;&amp; task.Progress != lastProgress </span><span class="cov0" title="0">{
+                                msg := ""
+                                if task.ProgressMessage != nil </span><span class="cov0" title="0">{
+                                        msg = *task.ProgressMessage
+                                }</span>
+                                <span class="cov0" title="0">progressCallback(task.Progress, msg)
+                                lastProgress = task.Progress</span>
+                        }
+
+                        // Check if task is in a terminal state
+                        <span class="cov0" title="0">if isTerminalStatus(task.Status) </span><span class="cov0" title="0">{
+                                wp.logger.WithFields(logrus.Fields{
+                                        "task_id":  taskID,
+                                        "status":   task.Status,
+                                        "duration": time.Since(startTime),
+                                }).Info("Task completed")
+
+                                if task.Status == models.TaskStatusFailed </span><span class="cov0" title="0">{
+                                        errMsg := "unknown error"
+                                        if task.ProgressMessage != nil </span><span class="cov0" title="0">{
+                                                errMsg = *task.ProgressMessage
+                                        }</span>
+                                        <span class="cov0" title="0">return task, fmt.Errorf("task failed: %s", errMsg)</span>
+                                }
+                                <span class="cov0" title="0">if task.Status == models.TaskStatusCancelled </span><span class="cov0" title="0">{
+                                        return task, fmt.Errorf("task was cancelled")
+                                }</span>
+                                <span class="cov0" title="0">if task.Status == models.TaskStatusDeadLetter </span><span class="cov0" title="0">{
+                                        return task, fmt.Errorf("task moved to dead letter queue")
+                                }</span>
+
+                                <span class="cov0" title="0">return task, nil</span>
+                        }
+
+                        // Adaptive polling - slow down over time
+                        <span class="cov0" title="0">if pollInterval &lt; maxPollInterval </span><span class="cov0" title="0">{
+                                pollInterval = time.Duration(float64(pollInterval) * 1.5)
+                                if pollInterval &gt; maxPollInterval </span><span class="cov0" title="0">{
+                                        pollInterval = maxPollInterval
+                                }</span>
+                        }
+                }
+        }
+}
+
+// WaitForCompletionWithOutput waits for task completion and returns captured output
+func (wp *AdaptiveWorkerPool) WaitForCompletionWithOutput(ctx context.Context, taskID string, timeout time.Duration) (*models.BackgroundTask, []byte, error) <span class="cov0" title="0">{
+        task, err := wp.WaitForCompletion(ctx, taskID, timeout, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return task, nil, err
+        }</span>
+
+        // Get output from task result if available
+        <span class="cov0" title="0">var output []byte
+        if task != nil &amp;&amp; task.Config.CaptureOutput </span><span class="cov0" title="0">{
+                // Output would be stored in the task's checkpoint or a separate storage
+                // For now, we return the progress message as output
+                if task.ProgressMessage != nil </span><span class="cov0" title="0">{
+                        output = []byte(*task.ProgressMessage)
+                }</span>
+        }
+
+        <span class="cov0" title="0">return task, output, nil</span>
+}
+
+// isTerminalStatus returns true if the status is a terminal state
+func isTerminalStatus(status models.TaskStatus) bool <span class="cov0" title="0">{
+        switch status </span>{
+        case models.TaskStatusCompleted,
+                models.TaskStatusFailed,
+                models.TaskStatusCancelled,
+                models.TaskStatusDeadLetter:<span class="cov0" title="0">
+                return true</span>
+        default:<span class="cov0" title="0">
+                return false</span>
+        }
+}
+
+// WaitForMultiple waits for multiple tasks to complete
+// Returns a map of taskID to WaitResult
+func (wp *AdaptiveWorkerPool) WaitForMultiple(ctx context.Context, taskIDs []string, timeout time.Duration) map[string]*WaitResult <span class="cov0" title="0">{
+        results := make(map[string]*WaitResult)
+        resultChan := make(chan struct {
+                id     string
+                result *WaitResult
+        }, len(taskIDs))
+
+        // Wait for each task in parallel
+        for _, taskID := range taskIDs </span><span class="cov0" title="0">{
+                go func(id string) </span><span class="cov0" title="0">{
+                        startTime := time.Now()
+                        task, output, err := wp.WaitForCompletionWithOutput(ctx, id, timeout)
+                        resultChan &lt;- struct {
+                                id     string
+                                result *WaitResult
+                        }{
+                                id: id,
+                                result: &amp;WaitResult{
+                                        Task:     task,
+                                        Output:   output,
+                                        Duration: time.Since(startTime),
+                                        Error:    err,
+                                },
+                        }
+                }</span>(taskID)
+        }
+
+        // Collect results
+        <span class="cov0" title="0">for range taskIDs </span><span class="cov0" title="0">{
+                r := &lt;-resultChan
+                results[r.id] = r.result
+        }</span>
+
+        <span class="cov0" title="0">return results</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

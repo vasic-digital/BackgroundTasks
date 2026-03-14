@@ -194,7 +194,7 @@ func NewAdaptiveWorkerPool(
 		stuckDetector:   stuckDetector,
 		notifier:        notifier,
 		logger:          logger,
-		metrics:         NewWorkerPoolMetrics(),
+		metrics:         GetGlobalMetrics(),
 		workers:         make(map[string]*Worker),
 		ctx:             ctx,
 		cancel:          cancel,
@@ -389,6 +389,7 @@ func (wp *AdaptiveWorkerPool) spawnWorker() {
 // workerLoop is the main loop for a worker
 func (wp *AdaptiveWorkerPool) workerLoop(worker *Worker) {
 	defer wp.wg.Done()
+	defer worker.cancel()
 	defer func() {
 		atomic.AddInt32(&wp.activeCount, -1)
 		if wp.metrics != nil {
@@ -404,6 +405,20 @@ func (wp *AdaptiveWorkerPool) workerLoop(worker *Worker) {
 	idleTimer := time.NewTimer(wp.config.WorkerIdleTimeout)
 	defer idleTimer.Stop()
 
+	// Helper function for interruptible sleep
+	sleepOrCancel := func(ctx context.Context, d time.Duration) bool {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return true
+		case <-ctx.Done():
+			return false
+		case <-worker.stopChan:
+			return false
+		}
+	}
+
 	for {
 		select {
 		case <-worker.ctx.Done():
@@ -411,6 +426,10 @@ func (wp *AdaptiveWorkerPool) workerLoop(worker *Worker) {
 		case <-worker.stopChan:
 			return
 		case <-idleTimer.C:
+			// Check context before processing to ensure prompt shutdown
+			if worker.ctx.Err() != nil || atomic.LoadInt32(&worker.stopChanDone) == 1 {
+				return
+			}
 			// Check if we can scale down
 			if wp.canScaleDown() {
 				wp.logger.WithField("worker_id", worker.ID).Debug("Worker stopping due to idle timeout")
@@ -424,12 +443,16 @@ func (wp *AdaptiveWorkerPool) workerLoop(worker *Worker) {
 			task, err := wp.queue.Dequeue(worker.ctx, worker.ID, requirements)
 			if err != nil {
 				wp.logger.WithError(err).Debug("Failed to dequeue task")
-				time.Sleep(wp.config.QueuePollInterval)
+				if !sleepOrCancel(worker.ctx, wp.config.QueuePollInterval) {
+					return
+				}
 				continue
 			}
 
 			if task == nil {
-				time.Sleep(wp.config.QueuePollInterval)
+				if !sleepOrCancel(worker.ctx, wp.config.QueuePollInterval) {
+					return
+				}
 				continue
 			}
 
@@ -643,6 +666,10 @@ func (wp *AdaptiveWorkerPool) scalingLoop() {
 		case <-wp.ctx.Done():
 			return
 		case <-ticker.C:
+			// Check context before processing to ensure prompt shutdown
+			if wp.ctx.Err() != nil {
+				return
+			}
 			wp.checkAndScale()
 		}
 	}
@@ -731,6 +758,10 @@ func (wp *AdaptiveWorkerPool) stuckDetectionLoop() {
 		case <-wp.ctx.Done():
 			return
 		case <-ticker.C:
+			// Check context before processing to ensure prompt shutdown
+			if wp.ctx.Err() != nil {
+				return
+			}
 			wp.checkForStuckTasks()
 		}
 	}
@@ -808,6 +839,10 @@ func (wp *AdaptiveWorkerPool) heartbeatMonitorLoop() {
 		case <-wp.ctx.Done():
 			return
 		case <-ticker.C:
+			// Check context before processing to ensure prompt shutdown
+			if wp.ctx.Err() != nil {
+				return
+			}
 			wp.updateHeartbeats()
 		}
 	}
