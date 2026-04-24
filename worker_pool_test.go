@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -361,15 +362,17 @@ func (m *mockNotificationService) BroadcastToTask(ctx context.Context, taskID st
 	return nil
 }
 
-// mockTaskExecutorWithBehavior is a simple executor that returns success
+// mockTaskExecutorWithBehavior is a simple executor that returns success.
+// executeCalled is atomic because Execute runs on the worker goroutine while
+// the test's main goroutine reads the counter after Enqueue — bare int is a race.
 type mockTaskExecutorWithBehavior struct {
-	executeCalled int
+	executeCalled atomic.Int64
 	executeDelay  time.Duration
 	shouldFail    bool
 }
 
 func (m *mockTaskExecutorWithBehavior) Execute(ctx context.Context, task *models.BackgroundTask, reporter ProgressReporter) error {
-	m.executeCalled++
+	m.executeCalled.Add(1)
 	if m.executeDelay > 0 {
 		select {
 		case <-ctx.Done():
@@ -486,7 +489,7 @@ func TestNewAdaptiveWorkerPool_Integration(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Verify task was processed
-	assert.Greater(t, executor.executeCalled, 0)
+	assert.Greater(t, executor.executeCalled.Load(), int64(0))
 
 	// Get worker status
 	statuses := pool.GetWorkerStatus()
