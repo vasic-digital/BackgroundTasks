@@ -1,5 +1,25 @@
 # CLAUDE.md - Background Tasks Module
 
+
+## Definition of Done
+
+This module inherits HelixAgent's universal Definition of Done — see the root
+`CLAUDE.md` and `docs/development/definition-of-done.md`. In one line: **no
+task is done without pasted output from a real run of the real system in the
+same session as the change.** Coverage and green suites are not evidence.
+
+### Acceptance demo for this module
+
+<!-- TODO: replace this block with the exact command(s) that exercise this
+     module end-to-end against real dependencies, and the expected output.
+     The commands must run the real artifact (built binary, deployed
+     container, real service) — no in-process fakes, no mocks, no
+     `httptest.NewServer`, no Robolectric, no JSDOM as proof of done. -->
+
+```bash
+# TODO
+```
+
 ## Overview
 
 `digital.vasic.background` is a generic, reusable Go module for background task processing with persistence, resource monitoring, stuck detection, and event publishing. It provides a complete solution for managing long-running tasks in distributed systems.
@@ -244,3 +264,12 @@ When updating the module:
 3. Update documentation (README, CLAUDE.md, AGENTS.md)
 4. Run `go fmt`, `go vet`, `go test` before committing
 5. Update CHANGELOG.md with changes
+
+## Integration Seams
+
+| Direction | Sibling modules |
+|-----------|-----------------|
+| Upstream (this module imports) | Concurrency, Models |
+| Downstream (these import this module) | HelixLLM |
+
+*Siblings* means other project-owned modules at the HelixAgent repo root. The root HelixAgent app and external systems are not listed here — the list above is intentionally scoped to module-to-module seams, because drift *between* sibling modules is where the "tests pass, product broken" class of bug most often lives. See root `CLAUDE.md` for the rules that keep these seams contract-tested.
