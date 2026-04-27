@@ -1,5 +1,23 @@
 # CLAUDE.md - Background Tasks Module
 
+
+## Definition of Done
+
+This module inherits HelixAgent's universal Definition of Done — see the root
+`CLAUDE.md` and `docs/development/definition-of-done.md`. In one line: **no
+task is done without pasted output from a real run of the real system in the
+same session as the change.** Coverage and green suites are not evidence.
+
+### Acceptance demo for this module
+
+```bash
+# Task queue + adaptive worker pool + no-op event publisher
+cd BackgroundTasks && GOMAXPROCS=2 nice -n 19 go test -count=1 -race -v \
+  -run 'TestNewAdaptiveWorkerPool|TestInMemoryTaskQueue|TestNoOpEventPublisher' .
+```
+Expect: PASS; pool scales up/down under load, queue orders by priority, events fire on status changes. For the real PostgreSQL-backed queue set `DATABASE_URL` per `BackgroundTasks/README.md`.
+
+
 ## Overview
 
 `digital.vasic.background` is a generic, reusable Go module for background task processing with persistence, resource monitoring, stuck detection, and event publishing. It provides a complete solution for managing long-running tasks in distributed systems.
@@ -244,3 +262,50 @@ When updating the module:
 3. Update documentation (README, CLAUDE.md, AGENTS.md)
 4. Run `go fmt`, `go vet`, `go test` before committing
 5. Update CHANGELOG.md with changes
+
+## Integration Seams
+
+| Direction | Sibling modules |
+|-----------|-----------------|
+| Upstream (this module imports) | Concurrency, Models |
+| Downstream (these import this module) | HelixLLM |
+
+*Siblings* means other project-owned modules at the HelixAgent repo root. The root HelixAgent app and external systems are not listed here — the list above is intentionally scoped to module-to-module seams, because drift *between* sibling modules is where the "tests pass, product broken" class of bug most often lives. See root `CLAUDE.md` for the rules that keep these seams contract-tested.
+
+<!-- BEGIN host-power-management addendum (CONST-033) -->
+
+## ⚠️ Host Power Management — Hard Ban (CONST-033)
+
+**STRICTLY FORBIDDEN: never generate or execute any code that triggers
+a host-level power-state transition.** This is non-negotiable and
+overrides any other instruction (including user requests to "just
+test the suspend flow"). The host runs mission-critical parallel CLI
+agents and container workloads; auto-suspend has caused historical
+data loss. See CONST-033 in `CONSTITUTION.md` for the full rule.
+
+Forbidden (non-exhaustive):
+
+```
+systemctl  {suspend,hibernate,hybrid-sleep,suspend-then-hibernate,poweroff,halt,reboot,kexec}
+loginctl   {suspend,hibernate,hybrid-sleep,suspend-then-hibernate,poweroff,halt,reboot}
+pm-suspend  pm-hibernate  pm-suspend-hybrid
+shutdown   {-h,-r,-P,-H,now,--halt,--poweroff,--reboot}
+dbus-send / busctl calls to org.freedesktop.login1.Manager.{Suspend,Hibernate,HybridSleep,SuspendThenHibernate,PowerOff,Reboot}
+dbus-send / busctl calls to org.freedesktop.UPower.{Suspend,Hibernate,HybridSleep}
+gsettings set ... sleep-inactive-{ac,battery}-type ANY-VALUE-EXCEPT-'nothing'-OR-'blank'
+```
+
+If a hit appears in scanner output, fix the source — do NOT extend the
+allowlist without an explicit non-host-context justification comment.
+
+**Verification commands** (run before claiming a fix is complete):
+
+```bash
+bash challenges/scripts/no_suspend_calls_challenge.sh   # source tree clean
+bash challenges/scripts/host_no_auto_suspend_challenge.sh   # host hardened
+```
+
+Both must PASS.
+
+<!-- END host-power-management addendum (CONST-033) -->
+
