@@ -1,0 +1,40 @@
+# Go build artefacts
+/bin/
+/build/
+/dist/
+/out/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Caches
+.cache/
+.idea/
+.vscode/
+
+# Temp + OS state
+*.tmp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Sensitive
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+id_rsa*
+id_ed25519*
+secrets/
+api_keys.sh
+
+# Logs
+*.log
+coverage.out
+htmlcov/
