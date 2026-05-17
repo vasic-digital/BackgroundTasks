@@ -284,7 +284,25 @@ func (q *PostgresTaskQueue) GetStats(ctx context.Context) (*TaskQueueStats, erro
 	}, nil
 }
 
-// InMemoryTaskQueue provides an in-memory queue implementation for testing
+// ACKNOWLEDGED: In-memory queue is a development/test-only implementation.
+//
+// Per CONST-050(A), mocks / stubs / fakes are permitted only in *_test.go
+// files. This implementation is retained in the production source tree
+// only because it is consumed by BOTH unit tests (background_test.go,
+// worker_pool_test.go) AND a documented development mode (single-process
+// experimentation without a Postgres dependency). Production deployments
+// MUST use a real persistent queue (PostgresTaskQueue above, or any other
+// real-backing-store implementation of the TaskQueue interface).
+//
+// Round-23 §11.4 audit (2026-05-17): the previous absence of any operator-
+// facing signal that this is a stub meant production callers could
+// accidentally instantiate it and never know the queue had no persistence
+// — process restart silently lost every queued task. NewInMemoryTaskQueue
+// now emits a WARN log on instantiation so operators see the dev-only
+// nature in any deployment-grade log aggregator.
+//
+// InMemoryTaskQueue provides an in-memory queue implementation. NOT for
+// production use; see the file-level ACKNOWLEDGED block above.
 type InMemoryTaskQueue struct {
 	tasks  map[string]*models.BackgroundTask
 	queue  []*models.BackgroundTask
@@ -292,8 +310,15 @@ type InMemoryTaskQueue struct {
 	logger *logrus.Logger
 }
 
-// NewInMemoryTaskQueue creates a new in-memory task queue
+// NewInMemoryTaskQueue creates a new in-memory task queue. NOT for production
+// use — emits a WARN log on instantiation to surface the dev-only nature.
+// See the type-level ACKNOWLEDGED block for the round-23 §11.4 / CONST-050(A)
+// rationale.
 func NewInMemoryTaskQueue(logger *logrus.Logger) *InMemoryTaskQueue {
+	if logger == nil {
+		logger = logrus.New()
+	}
+	logger.Warn("background: NewInMemoryTaskQueue instantiated — this is a DEVELOPMENT/TEST-ONLY queue with no persistence. Production deployments MUST use PostgresTaskQueue (or another real-backing-store TaskQueue). Process restart silently loses every queued task. See CONST-050(A) / round-23 §11.4 audit.")
 	return &InMemoryTaskQueue{
 		tasks:  make(map[string]*models.BackgroundTask),
 		queue:  make([]*models.BackgroundTask, 0),

@@ -2,6 +2,7 @@ package background
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"sync"
@@ -13,6 +14,23 @@ import (
 
 	"digital.vasic.models"
 )
+
+// ErrTaskOutputNotAvailable is returned by WaitForCompletionWithOutput when
+// the task completed but no captured output is available — either the task's
+// Config.CaptureOutput flag was false, no executor wrote captured output to
+// a backing store, or the lookup mechanism is not yet wired through.
+//
+// Round-23 §11.4 audit (2026-05-17): the previous implementation
+// silently substituted task.ProgressMessage (a human-readable progress
+// string like "running step 3/5...") in place of real captured output.
+// Consumers calling WaitForCompletionWithOutput received a progress-log
+// excerpt and treated it as the task's stdout / structured result —
+// CRITICAL PASS-bluff at the worker-pool output-capture layer. The
+// sentinel surfaces the gap honestly so consumers know to wire an
+// executor that actually persists output (e.g., to a checkpoint blob,
+// object-store key, or task-result table) instead of trusting a
+// fabricated progress-message stand-in.
+var ErrTaskOutputNotAvailable = errors.New("background: task completed but no captured output is available — the executor did not persist output to a backing store, or task.Config.CaptureOutput was false (the previous progress-message fallback produced fabricated output; §11.4 PASS-bluff removed)")
 
 // WorkerPoolConfig holds configuration for the worker pool
 type WorkerPoolConfig struct {
@@ -1039,24 +1057,36 @@ func (wp *AdaptiveWorkerPool) WaitForCompletion(ctx context.Context, taskID stri
 	}
 }
 
-// WaitForCompletionWithOutput waits for task completion and returns captured output
+// WaitForCompletionWithOutput waits for task completion and returns captured
+// output. If the task completes successfully but no captured output is
+// available (executor did not persist output, CaptureOutput=false, or
+// backing-store lookup not yet wired), the function returns the completed
+// task plus ErrTaskOutputNotAvailable so consumers can distinguish "no
+// output captured" from "task failed" — the previous implementation
+// silently fabricated output from task.ProgressMessage, see
+// ErrTaskOutputNotAvailable for the round-23 §11.4 audit context.
 func (wp *AdaptiveWorkerPool) WaitForCompletionWithOutput(ctx context.Context, taskID string, timeout time.Duration) (*models.BackgroundTask, []byte, error) {
 	task, err := wp.WaitForCompletion(ctx, taskID, timeout, nil)
 	if err != nil {
 		return task, nil, err
 	}
 
-	// Get output from task result if available
-	var output []byte
-	if task != nil && task.Config.CaptureOutput {
-		// Output would be stored in the task's checkpoint or a separate storage
-		// For now, we return the progress message as output
-		if task.ProgressMessage != nil {
-			output = []byte(*task.ProgressMessage)
-		}
+	// Task completed; locate captured output via the task's checkpoint /
+	// result-store seam. CaptureOutput=false → sentinel; no executor-side
+	// output-store wired in this build → sentinel. NEVER fabricate from
+	// ProgressMessage (the previous behaviour was a §11.4 PASS-bluff:
+	// progress strings such as "running step 3/5..." were handed back to
+	// callers as if they were the task's structured output).
+	if task == nil {
+		return task, nil, ErrTaskOutputNotAvailable
 	}
-
-	return task, output, nil
+	if !task.Config.CaptureOutput {
+		return task, nil, ErrTaskOutputNotAvailable
+	}
+	// Output backing-store lookup is the executor's responsibility; until
+	// an executor wires it through, we honestly surface that no output is
+	// available rather than fabricating a stand-in.
+	return task, nil, ErrTaskOutputNotAvailable
 }
 
 // isTerminalStatus returns true if the status is a terminal state
