@@ -1,0 +1,35 @@
+{
+  "_comment": "Round-261 bilingual fixture for digital.vasic.background. Five locales — en, sr (Cyrillic), ja (Japanese), ar (Arabic, RTL), zh-CN (Han). Each entry carries a task-name + task-payload string in the target locale plus an ASCII task_type so the queue/dispatch path is locale-agnostic. The runner uses these inputs to drive the InMemoryTaskQueue + AdaptiveWorkerPool + DefaultStuckDetector + NoOpEventPublisher end-to-end without any hardcoded translation table in the runner itself.",
+  "inputs": [
+    {
+      "locale": "en",
+      "task_name": "Process daily report",
+      "payload_message": "Process the daily synthesis report and email subscribers.",
+      "expected_min_runes": 30
+    },
+    {
+      "locale": "sr",
+      "task_name": "Обради дневни извештај",
+      "payload_message": "Обради дневни синтетички извештај и пошаљи претплатницима.",
+      "expected_min_runes": 30
+    },
+    {
+      "locale": "ja",
+      "task_name": "日次レポートを処理する",
+      "payload_message": "日次の合成レポートを処理し、購読者にメールで送信します。",
+      "expected_min_runes": 15
+    },
+    {
+      "locale": "ar",
+      "task_name": "معالجة التقرير اليومي",
+      "payload_message": "قم بمعالجة التقرير اليومي وأرسله إلى المشتركين عبر البريد الإلكتروني.",
+      "expected_min_runes": 30
+    },
+    {
+      "locale": "zh-CN",
+      "task_name": "处理每日报告",
+      "payload_message": "处理每日合成报告并通过电子邮件发送给订阅者。",
+      "expected_min_runes": 15
+    }
+  ]
+}
