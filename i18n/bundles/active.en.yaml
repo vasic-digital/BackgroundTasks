@@ -1,0 +1,57 @@
+# i18n bundle — active English (en) locale for BackgroundTasks.
+#
+# Every entry maps a CONST-046-migrated hardcoded literal in the
+# BackgroundTasks module to a message ID resolved at runtime via
+# Translator.T. A consuming application wires a real locale-aware
+# Translator at boot via i18n.SetTranslator; the in-package
+# NoopTranslator echoes the message ID verbatim for unit tests and
+# backward compatibility.
+#
+# Naming convention: background_<area>_<short_description>. All IDs
+# prefixed with background_ to avoid namespace collision with other
+# packages' bundles when loaded into the same go-i18n.Bundle.
+#
+# Round-375 §11.4 anti-bluff sweep (2026-05-19): migrated the two
+# user-facing string classes of this module — (1) Prometheus metric
+# Help text surfaced to operators in metrics dashboards / scrape
+# output, and (2) stuck-detector diagnostic reasons + remediation
+# recommendations surfaced to operators when a background task is
+# flagged as stuck. These were hardcoded English literals, silently
+# breaking the observability + diagnostics experience for non-English
+# operators (CONST-046).
+
+# --- Prometheus metric Help text (metrics.go) ---
+background_metric_workers_active: "Number of currently active workers"
+background_metric_workers_total: "Total number of workers (active and idle)"
+background_metric_scaling_events: "Total number of worker scaling events"
+background_metric_tasks_total: "Total number of tasks processed"
+background_metric_tasks_in_queue: "Number of tasks currently in queue by priority"
+background_metric_task_duration: "Task execution duration in seconds"
+background_metric_task_retries: "Total number of task retries"
+background_metric_stuck_tasks: "Total number of tasks detected as stuck"
+background_metric_dead_letter_tasks: "Total number of tasks moved to dead letter queue"
+background_metric_task_cpu_percent: "CPU usage percentage for a task"
+background_metric_task_memory_bytes: "Memory usage in bytes for a task"
+background_metric_task_io_read_bytes: "I/O bytes read for a task"
+background_metric_task_io_write_bytes: "I/O bytes written for a task"
+background_metric_task_net_bytes_sent: "Network bytes sent for a task"
+background_metric_task_net_bytes_recv: "Network bytes received for a task"
+background_metric_notifications_sent: "Total number of notifications sent"
+background_metric_notification_errors: "Total number of notification errors"
+background_metric_notification_latency: "Notification delivery latency in seconds"
+background_metric_queue_depth: "Number of tasks in queue by priority"
+background_metric_dequeue_latency: "Time taken to dequeue a task in seconds"
+background_metric_enqueue_latency: "Time taken to enqueue a task in seconds"
+
+# --- Stuck-detector diagnostic reasons (stuck_detector.go) ---
+background_stuck_no_heartbeat_ever: "no heartbeat ever received (threshold: {{threshold}})"
+background_stuck_no_heartbeat_for: "no heartbeat for {{elapsed}} (threshold: {{threshold}})"
+background_stuck_memory_exhaustion: "memory exhaustion: {{percent}}% used"
+background_stuck_fd_exhaustion: "file descriptor exhaustion: {{count}} open"
+background_stuck_excessive_threads: "excessive threads: {{count}}"
+
+# --- Stuck-detector remediation recommendations (stuck_detector.go) ---
+background_recommend_increase_memory: "Consider increasing memory limits"
+background_recommend_check_fd_leaks: "Check for file descriptor leaks"
+background_recommend_cancel_restart: "Task may need to be cancelled and restarted"
+background_recommend_check_deadlock: "Process appears completely idle - check for deadlock"

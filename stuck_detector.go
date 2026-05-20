@@ -2,12 +2,13 @@ package background
 
 import (
 	"context"
-	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 
+	"digital.vasic.background/i18n"
 	"digital.vasic.models"
 )
 
@@ -65,7 +66,7 @@ func (d *DefaultStuckDetector) IsStuck(ctx context.Context, task *models.Backgro
 	}
 
 	// Check heartbeat timeout
-	if reason := d.checkHeartbeatTimeout(task); reason != "" {
+	if reason := d.checkHeartbeatTimeout(ctx, task); reason != "" {
 		return true, reason
 	}
 
@@ -82,7 +83,7 @@ func (d *DefaultStuckDetector) IsStuck(ctx context.Context, task *models.Backgro
 		}
 
 		// Check for resource exhaustion
-		if reason := d.checkResourceExhaustion(snapshots); reason != "" {
+		if reason := d.checkResourceExhaustion(ctx, snapshots); reason != "" {
 			return true, reason
 		}
 
@@ -124,7 +125,7 @@ func (d *DefaultStuckDetector) SetThreshold(taskType string, threshold time.Dura
 }
 
 // checkHeartbeatTimeout checks if the task has exceeded heartbeat timeout
-func (d *DefaultStuckDetector) checkHeartbeatTimeout(task *models.BackgroundTask) string {
+func (d *DefaultStuckDetector) checkHeartbeatTimeout(ctx context.Context, task *models.BackgroundTask) string {
 	threshold := d.GetStuckThreshold(task.TaskType)
 	if threshold == 0 {
 		return "" // No timeout for endless tasks
@@ -137,9 +138,14 @@ func (d *DefaultStuckDetector) checkHeartbeatTimeout(task *models.BackgroundTask
 
 	if task.HasStaleHeartbeat(threshold) {
 		if task.LastHeartbeat == nil {
-			return fmt.Sprintf("no heartbeat ever received (threshold: %v)", threshold)
+			return i18n.Tr(ctx, "background_stuck_no_heartbeat_ever", map[string]any{
+				"threshold": threshold,
+			})
 		}
-		return fmt.Sprintf("no heartbeat for %v (threshold: %v)", time.Since(*task.LastHeartbeat).Round(time.Second), threshold)
+		return i18n.Tr(ctx, "background_stuck_no_heartbeat_for", map[string]any{
+			"elapsed":   time.Since(*task.LastHeartbeat).Round(time.Second),
+			"threshold": threshold,
+		})
 	}
 
 	return ""
@@ -178,7 +184,7 @@ func (d *DefaultStuckDetector) isProcessFrozen(snapshots []*models.ResourceSnaps
 }
 
 // checkResourceExhaustion checks for memory issues
-func (d *DefaultStuckDetector) checkResourceExhaustion(snapshots []*models.ResourceSnapshot) string {
+func (d *DefaultStuckDetector) checkResourceExhaustion(ctx context.Context, snapshots []*models.ResourceSnapshot) string {
 	if len(snapshots) == 0 {
 		return ""
 	}
@@ -187,17 +193,23 @@ func (d *DefaultStuckDetector) checkResourceExhaustion(snapshots []*models.Resou
 
 	// Check for memory exhaustion (> 95% memory)
 	if latest.MemoryPercent > 95 {
-		return fmt.Sprintf("memory exhaustion: %.1f%% used", latest.MemoryPercent)
+		return i18n.Tr(ctx, "background_stuck_memory_exhaustion", map[string]any{
+			"percent": strconv.FormatFloat(latest.MemoryPercent, 'f', 1, 64),
+		})
 	}
 
 	// Check for file descriptor exhaustion
 	if latest.OpenFDs > 10000 {
-		return fmt.Sprintf("file descriptor exhaustion: %d open", latest.OpenFDs)
+		return i18n.Tr(ctx, "background_stuck_fd_exhaustion", map[string]any{
+			"count": latest.OpenFDs,
+		})
 	}
 
 	// Check for excessive thread count
 	if latest.ThreadCount > 1000 {
-		return fmt.Sprintf("excessive threads: %d", latest.ThreadCount)
+		return i18n.Tr(ctx, "background_stuck_excessive_threads", map[string]any{
+			"count": latest.ThreadCount,
+		})
 	}
 
 	return ""
@@ -390,10 +402,10 @@ func (d *DefaultStuckDetector) AnalyzeTask(ctx context.Context, task *models.Bac
 		if latest.MemoryPercent > 90 || latest.OpenFDs > 10000 {
 			analysis.ResourceStatus.IsExhausted = true
 			if latest.MemoryPercent > 90 {
-				analysis.Recommendations = append(analysis.Recommendations, "Consider increasing memory limits")
+				analysis.Recommendations = append(analysis.Recommendations, i18n.Tr(ctx, "background_recommend_increase_memory", nil))
 			}
 			if latest.OpenFDs > 10000 {
-				analysis.Recommendations = append(analysis.Recommendations, "Check for file descriptor leaks")
+				analysis.Recommendations = append(analysis.Recommendations, i18n.Tr(ctx, "background_recommend_check_fd_leaks", nil))
 			}
 		}
 
@@ -422,10 +434,10 @@ func (d *DefaultStuckDetector) AnalyzeTask(ctx context.Context, task *models.Bac
 	// Add recommendations
 	if isStuck {
 		if analysis.HeartbeatStatus.IsStale {
-			analysis.Recommendations = append(analysis.Recommendations, "Task may need to be cancelled and restarted")
+			analysis.Recommendations = append(analysis.Recommendations, i18n.Tr(ctx, "background_recommend_cancel_restart", nil))
 		}
 		if !analysis.ActivityStatus.HasCPUActivity && !analysis.ActivityStatus.HasIOActivity {
-			analysis.Recommendations = append(analysis.Recommendations, "Process appears completely idle - check for deadlock")
+			analysis.Recommendations = append(analysis.Recommendations, i18n.Tr(ctx, "background_recommend_check_deadlock", nil))
 		}
 	}
 
