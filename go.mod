@@ -35,6 +35,6 @@ require (
 )
 
 replace (
-	digital.vasic.concurrency => ../Concurrency
-	digital.vasic.models => ../Models
+	digital.vasic.concurrency => ../concurrency
+	digital.vasic.models => ../models
 )
