@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -308,6 +309,12 @@ type InMemoryTaskQueue struct {
 	queue  []*models.BackgroundTask
 	mu     sync.RWMutex
 	logger *logrus.Logger
+
+	// idCounter is a process-monotonic sequence appended to auto-generated
+	// task IDs to guarantee uniqueness even when two concurrent Enqueue calls
+	// read time.Now().UnixNano() within the same clock tick. Incremented via
+	// sync/atomic so the guarantee holds independent of the mutex hold-window.
+	idCounter uint64
 }
 
 // NewInMemoryTaskQueue creates a new in-memory task queue. NOT for production
@@ -332,7 +339,11 @@ func (q *InMemoryTaskQueue) Enqueue(ctx context.Context, task *models.Background
 	defer q.mu.Unlock()
 
 	if task.ID == "" {
-		task.ID = fmt.Sprintf("task-%d", time.Now().UnixNano())
+		// Append a process-monotonic atomic counter so two enqueues that land
+		// in the same nanosecond tick still receive distinct IDs — without it,
+		// colliding IDs overwrite each other in q.tasks and silently lose a
+		// task. See TestInMemoryTaskQueue_ConcurrentEnqueue_UniqueIDs.
+		task.ID = fmt.Sprintf("task-%d-%d", time.Now().UnixNano(), atomic.AddUint64(&q.idCounter, 1))
 	}
 	task.Status = models.TaskStatusPending
 	task.CreatedAt = time.Now()
