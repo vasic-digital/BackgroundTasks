@@ -1,0 +1,12 @@
+# helix-deps.yaml — background_tasks Submodule-Dependency-Manifest (HelixConstitution §11.4.31)
+# Catalogue-Check (§11.4.74): inspected go.mod; own-org deps: vasic-digital/Models, vasic-digital/Concurrency.
+# Evidence: go.mod requires `digital.vasic.models` and declares `replace digital.vasic.models => ../models`
+#           and `replace digital.vasic.concurrency => ../concurrency`.
+schema_version: 1
+deps:
+  - {name: Models, ssh_url: git@github.com:vasic-digital/Models.git, ref: main, why: "go.mod requires module digital.vasic.models; resolved via replace => ../models", layout: flat}
+  - {name: Concurrency, ssh_url: git@github.com:vasic-digital/Concurrency.git, ref: main, why: "go.mod declares replace digital.vasic.concurrency => ../concurrency", layout: flat}
+transitive_handling:
+  recursive: true
+  conflict_resolution: operator-required
+language_specific_subtree: false
